@@ -1,4 +1,4 @@
-# Sowieso LaTeX Helper (Chrome Extension)
+# Sowiso LaTeX Helper (Chrome Extension)
 
 > This project is still a WIP – More updates coming soon!
 
