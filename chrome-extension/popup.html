@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sowieso LaTeX Helper</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <div class="header-row">
+        <h1>Sowieso LaTeX Helper</h1>
+        <div class="theme-wrap">
+          <span class="theme-label">Theme</span>
+          <div class="theme-toggle" role="group" aria-label="Theme mode">
+            <button type="button" class="theme-chip" data-theme="auto">Auto</button>
+            <button type="button" class="theme-chip" data-theme="light">Light</button>
+            <button type="button" class="theme-chip" data-theme="dark">Dark</button>
+          </div>
+        </div>
+      </div>
+
+      <label for="latexInput">LaTeX formula</label>
+      <textarea id="latexInput" spellcheck="false" placeholder="e.g. \\frac{a^2+b^2}{c}"></textarea>
+
+      <label for="insertMode">Insert mode</label>
+      <select id="insertMode">
+        <option value="raw">Raw LaTeX</option>
+        <option value="inline">Inline ($...$)</option>
+        <option value="block">Block ($$...$$)</option>
+      </select>
+
+      <label class="option-row">
+        <input id="sowisoConvert" type="checkbox" />
+        Convert LaTeX to Sowiso linear input
+      </label>
+
+      <section class="preview-section">
+        <div class="preview-label">Preview (click to insert)</div>
+        <button id="previewButton" type="button" class="preview-button">
+          <img id="previewImage" alt="LaTeX preview" />
+          <span id="previewPlaceholder">Type a formula to preview it here.</span>
+        </button>
+      </section>
+
+      <div class="button-row">
+        <button id="insertButton" type="button">Insert into page</button>
+        <button id="clearButton" type="button" class="secondary">Clear</button>
+      </div>
+
+      <p id="status" aria-live="polite"></p>
+
+      <details class="debug-section">
+        <summary>Debug log</summary>
+        <button id="clearDebugButton" type="button" class="secondary debug-clear">Clear debug log</button>
+        <pre id="debugLog"></pre>
+      </details>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
