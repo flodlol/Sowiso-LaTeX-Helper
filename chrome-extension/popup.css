@@ -278,8 +278,13 @@ textarea {
   color: var(--muted);
 }
 
-.debug-clear {
+.debug-actions {
   margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.debug-action {
   border: none;
   border-radius: 6px;
   padding: 6px 8px;

@@ -7,6 +7,7 @@ const previewPlaceholder = document.getElementById("previewPlaceholder");
 const insertButton = document.getElementById("insertButton");
 const clearButton = document.getElementById("clearButton");
 const statusEl = document.getElementById("status");
+const copyDebugButton = document.getElementById("copyDebugButton");
 const clearDebugButton = document.getElementById("clearDebugButton");
 const debugLogEl = document.getElementById("debugLog");
 const themeChips = [...document.querySelectorAll(".theme-chip")];
@@ -47,6 +48,35 @@ function appendDebug(message, payload) {
   }
 
   console.log("[SowisoHelper]", message, payload ?? "");
+}
+
+async function copyDebugLog() {
+  const text = debugLines.join("\n");
+  if (!text) {
+    setStatus("Debug log is empty.", true);
+    return;
+  }
+
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const helper = document.createElement("textarea");
+      helper.value = text;
+      helper.setAttribute("readonly", "readonly");
+      helper.style.position = "fixed";
+      helper.style.opacity = "0";
+      document.body.append(helper);
+      helper.select();
+      document.execCommand("copy");
+      helper.remove();
+    }
+    setStatus("Debug log copied.", false);
+    appendDebug("Debug log copied");
+  } catch (error) {
+    setStatus("Could not copy debug log.", true);
+    appendDebug("Failed to copy debug log", { error: error && error.message ? error.message : String(error) });
+  }
 }
 
 function getResolvedTheme(mode) {
@@ -127,7 +157,7 @@ function replaceFracLatex(input) {
 
     const num = value.slice(numOpen + 1, numClose);
     const den = value.slice(denOpen + 1, denClose);
-    const replacement = `((${num})/(${den}))`;
+    const replacement = `(${num})/(${den})`;
     value = `${value.slice(0, idx)}${replacement}${value.slice(denClose + 1)}`;
   }
 
@@ -153,6 +183,151 @@ function replaceSqrtLatex(input) {
   }
 
   return value;
+}
+
+function isAsciiLetter(ch) {
+  return /^[A-Za-z]$/.test(ch);
+}
+
+function isIdentifierToken(token) {
+  return /^[A-Za-z]+$/.test(token);
+}
+
+function isNumberToken(token) {
+  return /^[0-9]+(?:\.[0-9]+)?$/.test(token);
+}
+
+function isOperatorToken(token) {
+  return /^[+\-*/^=<>!&,|]$/.test(token) || token === "<=" || token === ">=" || token === "!=" || token === "_";
+}
+
+function tokenizeLinearExpression(input) {
+  const tokens = [];
+  let i = 0;
+
+  while (i < input.length) {
+    const ch = input[i];
+
+    if (/\s/.test(ch)) {
+      i += 1;
+      continue;
+    }
+
+    const two = input.slice(i, i + 2);
+    if (two === "<=" || two === ">=" || two === "!=") {
+      tokens.push(two);
+      i += 2;
+      continue;
+    }
+
+    if (isAsciiLetter(ch)) {
+      let j = i + 1;
+      while (j < input.length && isAsciiLetter(input[j])) {
+        j += 1;
+      }
+      tokens.push(input.slice(i, j));
+      i = j;
+      continue;
+    }
+
+    if (/[0-9]/.test(ch)) {
+      let j = i + 1;
+      while (j < input.length && /[0-9.]/.test(input[j])) {
+        j += 1;
+      }
+      tokens.push(input.slice(i, j));
+      i = j;
+      continue;
+    }
+
+    tokens.push(ch);
+    i += 1;
+  }
+
+  return tokens;
+}
+
+function insertImplicitMultiplication(input) {
+  const functions = new Set(["sqrt", "sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "abs", "min", "max"]);
+  const knownIdentifiers = new Set([
+    ...functions,
+    "alpha",
+    "beta",
+    "gamma",
+    "delta",
+    "epsilon",
+    "theta",
+    "lambda",
+    "mu",
+    "pi",
+    "rho",
+    "sigma",
+    "tau",
+    "phi",
+    "omega"
+  ]);
+  const baseTokens = tokenizeLinearExpression(input);
+  const tokens = [];
+
+  for (const token of baseTokens) {
+    if (!isIdentifierToken(token)) {
+      tokens.push(token);
+      continue;
+    }
+
+    const lower = token.toLowerCase();
+    if (token.length === 1 || knownIdentifiers.has(lower)) {
+      tokens.push(token);
+      continue;
+    }
+
+    const caseParts = token.match(/[A-Z]?[a-z]+|[A-Z]+/g) || [token];
+    for (const part of caseParts) {
+      const partLower = part.toLowerCase();
+      if (part.length === 1 || knownIdentifiers.has(partLower)) {
+        tokens.push(part);
+      } else {
+        for (const ch of part) {
+          tokens.push(ch);
+        }
+      }
+    }
+  }
+
+  const out = [];
+
+  const needsMulBetween = (prev, curr) => {
+    if (!prev || !curr) {
+      return false;
+    }
+    if (prev === "(" || curr === ")" || prev === "," || curr === ",") {
+      return false;
+    }
+    if (prev === "_" || curr === "_") {
+      return false;
+    }
+    if (isOperatorToken(prev) || isOperatorToken(curr)) {
+      return false;
+    }
+
+    if (curr === "(" && isIdentifierToken(prev) && functions.has(prev)) {
+      return false;
+    }
+
+    const prevEndsOperand = isIdentifierToken(prev) || isNumberToken(prev) || prev === ")";
+    const currStartsOperand = isIdentifierToken(curr) || isNumberToken(curr) || curr === "(";
+    return prevEndsOperand && currStartsOperand;
+  };
+
+  for (const token of tokens) {
+    const prev = out.length > 0 ? out[out.length - 1] : null;
+    if (needsMulBetween(prev, token)) {
+      out.push("*");
+    }
+    out.push(token);
+  }
+
+  return out.join("");
 }
 
 function convertLatexToSowisoLinear(input) {
@@ -189,13 +364,19 @@ function convertLatexToSowisoLinear(input) {
   out = replaceFracLatex(out);
   out = replaceSqrtLatex(out);
 
-  // Handle common grouped powers/subscripts.
+  // Normalize powers/subscripts: keep simple indices/exponents compact, group only complex ones.
+  out = out.replace(/\^\{([A-Za-z0-9]+)\}/g, "^$1");
+  out = out.replace(/_\{([A-Za-z0-9]+)\}/g, "_$1");
   out = out.replace(/\^\{([^{}]+)\}/g, "^($1)");
   out = out.replace(/_\{([^{}]+)\}/g, "_($1)");
 
   out = out.replace(/[{}]/g, (ch) => (ch === "{" ? "(" : ")"));
   out = out.replace(/\\([a-zA-Z]+)/g, "$1");
+  out = out.replace(/\s+/g, " ").trim();
+  out = insertImplicitMultiplication(out);
   out = out.replace(/\s+/g, "");
+  out = out.replace(/\*{2,}/g, "*");
+  out = out.replace(/\(\*/g, "(").replace(/\*\)/g, ")");
   return out;
 }
 
@@ -288,15 +469,72 @@ function focusSowisoSlot(tabId) {
             return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
           }
 
+          function resolveMarkedSlot() {
+            const markedNodes = [...document.querySelectorAll("[data-sowiso-helper-last-slot='1']")]
+              .filter((node) => node instanceof HTMLElement && isVisible(node));
+            if (markedNodes.length === 0) {
+              return null;
+            }
+
+            const markedCanvas = markedNodes.find((node) => node instanceof HTMLCanvasElement && node.classList.contains("mathdoxformula"));
+            const markedAnchor = markedNodes.find((node) => node instanceof HTMLElement && node.hasAttribute("tabindex"));
+            const marked = markedCanvas || markedAnchor || markedNodes[0];
+            if (!(marked instanceof HTMLElement)) {
+              return null;
+            }
+
+            if (marked instanceof HTMLCanvasElement) {
+              const anchor = marked.closest("a[tabindex], [tabindex]");
+              if (anchor instanceof HTMLElement && isVisible(anchor)) {
+                return anchor;
+              }
+              return marked;
+            }
+
+            const td = marked.closest("td");
+            if (td) {
+              const anchor = td.querySelector("[tabindex]");
+              if (anchor instanceof HTMLElement && isVisible(anchor)) {
+                return anchor;
+              }
+
+              const canvas = td.querySelector("canvas.mathdoxformula");
+              if (canvas instanceof HTMLCanvasElement && isVisible(canvas)) {
+                return canvas;
+              }
+            }
+
+            return marked;
+          }
+
           const selectors = [
-            "td[class*='pre_input'] + td canvas.mathdoxformula",
             "td[class*='pre_input'] + td [tabindex]",
+            "td[class*='pre_input'] + td canvas.mathdoxformula",
             "td[class*='pre_input'] + td",
-            "table.input_table td.pre_input_text + td canvas.mathdoxformula",
             "table.input_table td.pre_input_text + td [tabindex]",
+            "table.input_table td.pre_input_text + td canvas.mathdoxformula",
             "table.input_table td.pre_input_text + td",
+            "a[tabindex]",
             "canvas.mathdoxformula"
           ];
+
+          const markedSlot = resolveMarkedSlot();
+          if (markedSlot) {
+            const events = ["pointerdown", "mousedown", "mouseup", "click"];
+            for (const type of events) {
+              markedSlot.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+            }
+            if (markedSlot instanceof HTMLElement) {
+              markedSlot.focus();
+            }
+
+            return {
+              ok: true,
+              selector: "[data-sowiso-helper-last-slot='1']",
+              tag: markedSlot.tagName,
+              className: markedSlot.className || null
+            };
+          }
 
           for (const selector of selectors) {
             const nodes = [...document.querySelectorAll(selector)].filter((el) => isVisible(el));
@@ -304,7 +542,13 @@ function focusSowisoSlot(tabId) {
               continue;
             }
 
-            const target = nodes[0];
+            let target = nodes[0];
+            if (target instanceof HTMLCanvasElement) {
+              const anchor = target.closest("a[tabindex], [tabindex]");
+              if (anchor instanceof HTMLElement) {
+                target = anchor;
+              }
+            }
             const events = ["pointerdown", "mousedown", "mouseup", "click"];
             for (const type of events) {
               target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
@@ -563,30 +807,100 @@ function sowisoTextareaInsert(tabId, formula) {
             }
           }
 
-          function findTextareaForActiveSlot() {
+          function resolveMarkedSlot() {
+            const markedNodes = [...document.querySelectorAll("[data-sowiso-helper-last-slot='1']")]
+              .filter((node) => node instanceof HTMLElement && isVisible(node));
+            if (markedNodes.length === 0) {
+              return null;
+            }
+
+            const markedCanvas = markedNodes.find((node) => node instanceof HTMLCanvasElement && node.classList.contains("mathdoxformula"));
+            const markedAnchor = markedNodes.find((node) => node instanceof HTMLElement && node.hasAttribute("tabindex"));
+            const marked = markedCanvas || markedAnchor || markedNodes[0];
+            if (!(marked instanceof HTMLElement)) {
+              return null;
+            }
+
+            if (marked instanceof HTMLCanvasElement) {
+              const anchor = marked.closest("a[tabindex], [tabindex]");
+              if (anchor instanceof HTMLElement && isVisible(anchor)) {
+                return anchor;
+              }
+              return marked;
+            }
+
+            const td = marked.closest("td");
+            if (td) {
+              const anchor = td.querySelector("[tabindex]");
+              if (anchor instanceof HTMLElement && isVisible(anchor)) {
+                return anchor;
+              }
+              const canvas = td.querySelector("canvas.mathdoxformula");
+              if (canvas instanceof HTMLCanvasElement && isVisible(canvas)) {
+                return canvas;
+              }
+            }
+
+            return marked;
+          }
+
+          function findBundleForActiveSlot() {
             const active = document.activeElement;
-            if (active instanceof HTMLElement && active.classList.contains("mathdoxformula")) {
+            if (active instanceof HTMLElement && (active.classList.contains("mathdoxformula") || active.hasAttribute("tabindex"))) {
               const td = active.closest("td");
               if (td) {
                 const ta = td.querySelector("textarea.mathdoxformula, textarea.math-editor, textarea[class*='mathdox'], textarea[class*='math-editor']");
+                const canvas = td.querySelector("canvas.mathdoxformula");
                 if (ta instanceof HTMLTextAreaElement) {
-                  return ta;
+                  return {
+                    textarea: ta,
+                    canvas: canvas instanceof HTMLCanvasElement ? canvas : null
+                  };
                 }
               }
             }
 
-            const slot = [...document.querySelectorAll("td[class*='pre_input'] + td canvas.mathdoxformula, table.input_table td.pre_input_text + td canvas.mathdoxformula, canvas.mathdoxformula")]
-              .find((el) => isVisible(el));
-            if (slot) {
-              clickLikeUser(slot);
-              if (slot instanceof HTMLElement) {
-                slot.focus();
-              }
-              const td = slot.closest("td");
+            const marked = resolveMarkedSlot();
+            if (marked) {
+              const td = marked.closest("td");
               if (td) {
                 const ta = td.querySelector("textarea.mathdoxformula, textarea.math-editor, textarea[class*='mathdox'], textarea[class*='math-editor']");
+                const canvas = td.querySelector("canvas.mathdoxformula");
                 if (ta instanceof HTMLTextAreaElement) {
-                  return ta;
+                  clickLikeUser(marked);
+                  marked.focus();
+                  return {
+                    textarea: ta,
+                    canvas: canvas instanceof HTMLCanvasElement ? canvas : null
+                  };
+                }
+              }
+            }
+
+            const slot = [...document.querySelectorAll("td[class*='pre_input'] + td [tabindex], td[class*='pre_input'] + td canvas.mathdoxformula, table.input_table td.pre_input_text + td [tabindex], table.input_table td.pre_input_text + td canvas.mathdoxformula, a[tabindex], canvas.mathdoxformula")]
+              .find((el) => isVisible(el));
+            if (slot) {
+              let target = slot;
+              if (target instanceof HTMLCanvasElement) {
+                const anchor = target.closest("a[tabindex], [tabindex]");
+                if (anchor instanceof HTMLElement) {
+                  target = anchor;
+                }
+              }
+
+              clickLikeUser(target);
+              if (target instanceof HTMLElement) {
+                target.focus();
+              }
+              const td = target.closest("td") || slot.closest("td");
+              if (td) {
+                const ta = td.querySelector("textarea.mathdoxformula, textarea.math-editor, textarea[class*='mathdox'], textarea[class*='math-editor']");
+                const canvas = td.querySelector("canvas.mathdoxformula");
+                if (ta instanceof HTMLTextAreaElement) {
+                  return {
+                    textarea: ta,
+                    canvas: canvas instanceof HTMLCanvasElement ? canvas : null
+                  };
                 }
               }
             }
@@ -594,45 +908,83 @@ function sowisoTextareaInsert(tabId, formula) {
             return null;
           }
 
-          const target = findTextareaForActiveSlot();
+          function readCanvasSignature(canvas) {
+            if (!(canvas instanceof HTMLCanvasElement) || typeof canvas.toDataURL !== "function") {
+              return null;
+            }
+            try {
+              return canvas.toDataURL();
+            } catch (_error) {
+              return null;
+            }
+          }
+
+          function readVisibleCanvasSignature() {
+            const canvases = [...document.querySelectorAll("td[class*='pre_input'] + td canvas.mathdoxformula, table.input_table td.pre_input_text + td canvas.mathdoxformula, canvas.mathdoxformula")]
+              .filter((el) => el instanceof HTMLCanvasElement && isVisible(el));
+            const serial = canvases.map((canvas) => readCanvasSignature(canvas)).join("||");
+            return { count: canvases.length, serial };
+          }
+
+          const bundle = findBundleForActiveSlot();
+          const target = bundle ? bundle.textarea : null;
+          const targetCanvas = bundle ? bundle.canvas : null;
           if (!target) {
             return { ok: false, error: "Could not find MathDox textarea for active answer slot." };
           }
 
           const before = target.value || "";
+          const beforeCanvas = readCanvasSignature(targetCanvas);
+          const beforeVisibleCanvas = readVisibleCanvasSignature();
           target.focus();
 
-          if (typeof target.setRangeText === "function") {
-            target.setRangeText(rawFormula, 0, target.value.length, "end");
+          // Select all existing content so execCommand replaces it.
+          if (typeof target.setSelectionRange === "function") {
+            target.setSelectionRange(0, target.value.length);
           } else {
-            target.value = rawFormula;
+            target.select();
           }
 
+          // execCommand('insertText') generates trusted InputEvents (isTrusted: true),
+          // which MathDox requires. Untrusted events from dispatchEvent are ignored.
+          let execCommandWorked = false;
           try {
-            target.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, data: rawFormula, inputType: "insertText" }));
+            execCommandWorked = document.execCommand("insertText", false, rawFormula);
           } catch (_error) {
-            // Ignore.
+            execCommandWorked = false;
           }
 
-          target.dispatchEvent(new Event("input", { bubbles: true }));
-          target.dispatchEvent(new Event("change", { bubbles: true }));
-          target.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Unidentified", code: "Unidentified" }));
-          target.dispatchEvent(new Event("blur", { bubbles: true }));
-
-          if (window.jQuery && typeof window.jQuery === "function") {
-            try {
-              window.jQuery(target).trigger("input");
-              window.jQuery(target).trigger("change");
-              window.jQuery(target).trigger("keyup");
-            } catch (_error) {
-              // Ignore.
+          // Fallback: set value directly if execCommand didn't work.
+          if (!execCommandWorked || target.value !== rawFormula) {
+            if (typeof target.setRangeText === "function") {
+              target.setRangeText(rawFormula, 0, target.value.length, "end");
+            } else {
+              target.value = rawFormula;
             }
+
+            target.dispatchEvent(new Event("input", { bubbles: true }));
+            target.dispatchEvent(new Event("change", { bubbles: true }));
           }
+
+          const after = target.value || "";
+          const afterCanvas = readCanvasSignature(targetCanvas);
+          const afterVisibleCanvas = readVisibleCanvasSignature();
+          const valueChanged = after !== before;
+          const canvasChanged = beforeCanvas !== null && afterCanvas !== null && beforeCanvas !== afterCanvas;
+          const anyVisibleCanvasChanged = beforeVisibleCanvas.serial !== afterVisibleCanvas.serial;
+          const hasVisibleCanvas = afterVisibleCanvas.count > 0 || beforeVisibleCanvas.count > 0 || Boolean(targetCanvas);
+          const visibleEffect = canvasChanged || anyVisibleCanvasChanged;
+          const ok = hasVisibleCanvas ? visibleEffect : (after === rawFormula || valueChanged);
 
           return {
-            ok: target.value !== before || rawFormula.length === 0,
+            ok,
+            execCommandWorked,
+            valueChanged,
+            canvasChanged,
+            anyVisibleCanvasChanged,
+            hasVisibleCanvas,
             beforeLength: before.length,
-            afterLength: (target.value || "").length,
+            afterLength: after.length,
             className: target.className || null
           };
         }
@@ -659,6 +1011,966 @@ function sowisoTextareaInsert(tabId, formula) {
           .find(Boolean);
 
         resolve({ ok: false, error: firstError || "MathDox textarea insertion failed.", debugFrames });
+      }
+    );
+  });
+}
+
+function sowisoSlotKeyTypeInsert(tabId, formula) {
+  return new Promise((resolve) => {
+    if (!chrome.scripting || typeof chrome.scripting.executeScript !== "function") {
+      resolve({ ok: false, error: "Scripting API unavailable." });
+      return;
+    }
+
+    chrome.scripting.executeScript(
+      {
+        target: { tabId, allFrames: true },
+        args: [formula],
+        func: async (formulaText) => {
+          function wait(ms) {
+            return new Promise((done) => window.setTimeout(done, ms));
+          }
+
+          function isVisible(el) {
+            if (!(el instanceof HTMLElement)) {
+              return false;
+            }
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+          }
+
+          function normalizeSlot(el) {
+            if (!(el instanceof HTMLElement)) {
+              return null;
+            }
+            if (el instanceof HTMLCanvasElement) {
+              const anchor = el.closest("a[tabindex], [tabindex]");
+              if (anchor instanceof HTMLElement) {
+                return anchor;
+              }
+            }
+            return el;
+          }
+
+          function resolveMarkedSlot() {
+            const markedNodes = [...document.querySelectorAll("[data-sowiso-helper-last-slot='1']")]
+              .filter((node) => node instanceof HTMLElement && isVisible(node));
+            if (markedNodes.length === 0) {
+              return null;
+            }
+            const markedCanvas = markedNodes.find((node) => node instanceof HTMLCanvasElement && node.classList.contains("mathdoxformula"));
+            const markedAnchor = markedNodes.find((node) => node instanceof HTMLElement && node.hasAttribute("tabindex"));
+            const marked = markedCanvas || markedAnchor || markedNodes[0];
+            return normalizeSlot(marked);
+          }
+
+          function findSlot() {
+            const marked = resolveMarkedSlot();
+            if (marked) {
+              return marked;
+            }
+
+            const active = document.activeElement;
+            if (active instanceof HTMLElement) {
+              const normalized = normalizeSlot(active);
+              if (normalized && (normalized.classList.contains("mathdoxformula") || normalized.hasAttribute("tabindex"))) {
+                return normalized;
+              }
+            }
+
+            const selectors = [
+              "td[class*='pre_input'] + td [tabindex]",
+              "td[class*='pre_input'] + td canvas.mathdoxformula",
+              "table.input_table td.pre_input_text + td [tabindex]",
+              "table.input_table td.pre_input_text + td canvas.mathdoxformula",
+              "a[tabindex]",
+              "canvas.mathdoxformula"
+            ];
+            for (const selector of selectors) {
+              const candidate = [...document.querySelectorAll(selector)].find((node) => isVisible(node));
+              if (candidate) {
+                return normalizeSlot(candidate);
+              }
+            }
+            return null;
+          }
+
+          function snapshot() {
+            const textareas = [...document.querySelectorAll("textarea.math-editor, textarea.mathdoxformula, textarea[class*='mathdox'], textarea[class*='math-editor']")];
+            const serial = textareas.map((ta) => ta.value || "").join("||");
+            const canvases = [...document.querySelectorAll("td[class*='pre_input'] + td canvas.mathdoxformula, table.input_table td.pre_input_text + td canvas.mathdoxformula, canvas.mathdoxformula")]
+              .filter((canvas) => canvas instanceof HTMLCanvasElement && isVisible(canvas));
+            const canvasSerial = canvases.map((canvas) => {
+              try {
+                return canvas.toDataURL();
+              } catch (_error) {
+                return null;
+              }
+            }).join("||");
+            return { serial, canvasSerial };
+          }
+
+          function codeForChar(ch) {
+            if (/^[a-z]$/i.test(ch)) return `Key${ch.toUpperCase()}`;
+            if (/^[0-9]$/.test(ch)) return `Digit${ch}`;
+            const map = {
+              "=": "Equal",
+              "+": "Equal",
+              "-": "Minus",
+              "_": "Minus",
+              "/": "Slash",
+              "?": "Slash",
+              ".": "Period",
+              ",": "Comma",
+              "(": "Digit9",
+              ")": "Digit0",
+              "^": "Digit6",
+              "*": "Digit8",
+              "<": "Comma",
+              ">": "Period"
+            };
+            return map[ch] || "Unidentified";
+          }
+
+          const slot = findSlot();
+          if (!slot) {
+            return { ok: false, error: "No active MathDox slot found for direct key typing." };
+          }
+
+          const td = slot.closest("td");
+          const ta = td ? td.querySelector("textarea.mathdoxformula, textarea.math-editor, textarea[class*='mathdox'], textarea[class*='math-editor']") : null;
+          const targetTextarea = ta instanceof HTMLTextAreaElement ? ta : null;
+
+          const before = snapshot();
+
+          const clickTypes = ["pointerdown", "mousedown", "mouseup", "click"];
+          for (const type of clickTypes) {
+            slot.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+          }
+          slot.focus();
+          await wait(25);
+
+          if (targetTextarea) {
+            targetTextarea.focus();
+            if (typeof targetTextarea.setRangeText === "function") {
+              targetTextarea.setRangeText("", 0, targetTextarea.value.length, "end");
+            } else {
+              targetTextarea.value = "";
+            }
+            targetTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+            targetTextarea.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+
+          const fire = (receiver, type, payload) => {
+            receiver.dispatchEvent(
+              new KeyboardEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                ...payload
+              })
+            );
+          };
+
+          for (const ch of [...(formulaText || "")]) {
+            const payload = {
+              key: ch,
+              code: codeForChar(ch),
+              shiftKey: /^[A-Z]$/.test(ch)
+            };
+
+            fire(slot, "keydown", payload);
+            fire(document, "keydown", payload);
+            fire(slot, "keypress", payload);
+            fire(document, "keypress", payload);
+
+            if (targetTextarea) {
+              const end = targetTextarea.value.length;
+              if (typeof targetTextarea.setRangeText === "function") {
+                targetTextarea.setRangeText(ch, end, end, "end");
+              } else {
+                targetTextarea.value = `${targetTextarea.value}${ch}`;
+              }
+              try {
+                targetTextarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, data: ch, inputType: "insertText" }));
+                targetTextarea.dispatchEvent(new InputEvent("input", { bubbles: true, cancelable: false, data: ch, inputType: "insertText" }));
+              } catch (_error) {
+                targetTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+              }
+            }
+
+            fire(slot, "keyup", payload);
+            fire(document, "keyup", payload);
+          }
+
+          const enterPayload = { key: "Enter", code: "Enter", shiftKey: false };
+          fire(slot, "keydown", enterPayload);
+          fire(document, "keydown", enterPayload);
+          fire(slot, "keyup", enterPayload);
+          fire(document, "keyup", enterPayload);
+
+          await wait(140);
+          const after = snapshot();
+          const valueChanged = before.serial !== after.serial;
+          const canvasChanged = before.canvasSerial !== after.canvasSerial;
+
+          return {
+            ok: canvasChanged || valueChanged,
+            valueChanged,
+            canvasChanged,
+            textareaPresent: Boolean(targetTextarea)
+          };
+        }
+      },
+      (results) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+
+        const debugFrames = (results || []).map((entry) => ({
+          frameId: entry.frameId,
+          result: entry.result || null
+        }));
+
+        const successful = (results || []).find((entry) => entry && entry.result && entry.result.ok);
+        if (successful) {
+          resolve({ ok: true, debugFrames, ...successful.result });
+          return;
+        }
+
+        const firstError = debugFrames
+          .map((entry) => entry.result && entry.result.error)
+          .find(Boolean);
+
+        resolve({ ok: false, error: firstError || "Direct slot key typing failed.", debugFrames });
+      }
+    );
+  });
+}
+
+function sowisoMainWorldApiInsert(tabId, formula) {
+  return new Promise((resolve) => {
+    if (!chrome.scripting || typeof chrome.scripting.executeScript !== "function") {
+      resolve({ ok: false, error: "Scripting API unavailable." });
+      return;
+    }
+
+    chrome.scripting.executeScript(
+      {
+        target: { tabId, allFrames: true },
+        world: "MAIN",
+        args: [formula],
+        func: (rawFormula) => {
+          function isVisible(el) {
+            if (!(el instanceof HTMLElement)) {
+              return false;
+            }
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+          }
+
+          function readCanvasSignature(canvas) {
+            if (!(canvas instanceof HTMLCanvasElement) || typeof canvas.toDataURL !== "function") {
+              return null;
+            }
+            try {
+              return canvas.toDataURL();
+            } catch (_error) {
+              return null;
+            }
+          }
+
+          function readVisibleCanvasState() {
+            const canvases = [...document.querySelectorAll("td[class*='pre_input'] + td canvas.mathdoxformula, table.input_table td.pre_input_text + td canvas.mathdoxformula, canvas.mathdoxformula")]
+              .filter((canvas) => canvas instanceof HTMLCanvasElement && isVisible(canvas));
+            return {
+              count: canvases.length,
+              serial: canvases.map((canvas) => readCanvasSignature(canvas)).join("||")
+            };
+          }
+
+          function normalizeSlot(el) {
+            if (!(el instanceof HTMLElement)) {
+              return null;
+            }
+            if (el instanceof HTMLCanvasElement) {
+              const anchor = el.closest("a[tabindex], [tabindex]");
+              if (anchor instanceof HTMLElement) {
+                return anchor;
+              }
+            }
+            return el;
+          }
+
+          function resolveMarkedSlot() {
+            const markedNodes = [...document.querySelectorAll("[data-sowiso-helper-last-slot='1']")]
+              .filter((node) => node instanceof HTMLElement && isVisible(node));
+            if (markedNodes.length === 0) {
+              return null;
+            }
+            const markedCanvas = markedNodes.find((node) => node instanceof HTMLCanvasElement && node.classList.contains("mathdoxformula"));
+            const markedAnchor = markedNodes.find((node) => node instanceof HTMLElement && node.hasAttribute("tabindex"));
+            const marked = markedCanvas || markedAnchor || markedNodes[0];
+            return normalizeSlot(marked);
+          }
+
+          function findSlotAndTextarea() {
+            const marked = resolveMarkedSlot();
+            const active = normalizeSlot(document.activeElement);
+            const selectors = [
+              "td[class*='pre_input'] + td [tabindex]",
+              "td[class*='pre_input'] + td canvas.mathdoxformula",
+              "table.input_table td.pre_input_text + td [tabindex]",
+              "table.input_table td.pre_input_text + td canvas.mathdoxformula",
+              "a[tabindex]",
+              "canvas.mathdoxformula"
+            ];
+
+            const candidates = [];
+            if (marked && isVisible(marked)) {
+              candidates.push(marked);
+            }
+            if (active && isVisible(active)) {
+              candidates.push(active);
+            }
+            for (const selector of selectors) {
+              const node = [...document.querySelectorAll(selector)].find((candidate) => isVisible(candidate));
+              if (node) {
+                candidates.push(normalizeSlot(node));
+              }
+            }
+
+            for (const candidate of candidates) {
+              const slot = normalizeSlot(candidate);
+              if (!slot) {
+                continue;
+              }
+
+              const td = slot.closest("td");
+              if (!td) {
+                continue;
+              }
+
+              const textarea = td.querySelector("textarea.mathdoxformula, textarea.math-editor, textarea[class*='mathdox'], textarea[class*='math-editor']");
+              const canvas = td.querySelector("canvas.mathdoxformula");
+              if (!(textarea instanceof HTMLTextAreaElement)) {
+                continue;
+              }
+
+              return {
+                slot,
+                textarea,
+                canvas: canvas instanceof HTMLCanvasElement ? canvas : null
+              };
+            }
+
+            return { slot: null, textarea: null, canvas: null };
+          }
+
+          function methodList(obj) {
+            if (!obj) {
+              return [];
+            }
+            const methods = new Set();
+            let cur = obj;
+            let depth = 0;
+            while (cur && depth < 5) {
+              for (const key of Object.getOwnPropertyNames(cur)) {
+                try {
+                  if (typeof obj[key] === "function") {
+                    methods.add(key);
+                  }
+                } catch (_error) {
+                  // Ignore access errors.
+                }
+              }
+              cur = Object.getPrototypeOf(cur);
+              depth += 1;
+            }
+            return [...methods];
+          }
+
+          function readState(bundle) {
+            const value = bundle.textarea ? (bundle.textarea.value || "") : "";
+            const canvas = readCanvasSignature(bundle.canvas);
+            const visible = readVisibleCanvasState();
+            return { value, canvas, visible };
+          }
+
+          const bundle = findSlotAndTextarea();
+          if (!bundle.slot) {
+            return { ok: false, error: "No active slot found in MAIN world." };
+          }
+
+          const clicks = ["pointerdown", "mousedown", "mouseup", "click"];
+          for (const type of clicks) {
+            bundle.slot.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+          }
+          bundle.slot.focus();
+
+          const beforeState = readState(bundle);
+
+          const attempts = [];
+          const attemptLimit = 240;
+          const pushAttempt = (entry) => {
+            if (attempts.length < attemptLimit) {
+              attempts.push(entry);
+            }
+          };
+
+          const potentialEditors = [];
+          const seenEditors = new Set();
+          const addEditor = (source, editor) => {
+            if (!editor || typeof editor !== "object") {
+              return;
+            }
+            if (seenEditors.has(editor)) {
+              return;
+            }
+            seenEditors.add(editor);
+            potentialEditors.push({ source, editor });
+          };
+
+          if (bundle.textarea && bundle.textarea.formulaeditorobject) {
+            addEditor("textarea.formulaeditorobject", bundle.textarea.formulaeditorobject);
+          }
+          if (bundle.canvas && bundle.canvas.formulaeditorobject) {
+            addEditor("canvas.formulaeditorobject", bundle.canvas.formulaeditorobject);
+          }
+          if (bundle.slot && bundle.slot.formulaeditorobject) {
+            addEditor("slot.formulaeditorobject", bundle.slot.formulaeditorobject);
+          }
+
+          const harvestEditorsFromHost = (host, source) => {
+            if (!host || (typeof host !== "object" && typeof host !== "function")) {
+              return;
+            }
+            for (const key of Object.getOwnPropertyNames(host)) {
+              if (!/(editor|formula|mathdox|math)/i.test(key)) {
+                continue;
+              }
+              let value;
+              try {
+                value = host[key];
+              } catch (_error) {
+                continue;
+              }
+              if (value && (typeof value === "object" || typeof value === "function")) {
+                addEditor(`${source}.${key}`, value);
+              }
+            }
+          };
+
+          harvestEditorsFromHost(bundle.slot, "slot");
+          harvestEditorsFromHost(bundle.canvas, "canvas");
+          harvestEditorsFromHost(bundle.textarea, "textarea");
+
+          const currentValue = () => (bundle.textarea ? (bundle.textarea.value || "") : "");
+          const setTextareaValue = (value, source) => {
+            if (!bundle.textarea) {
+              return false;
+            }
+            const before = currentValue();
+            try {
+              bundle.textarea.value = "";
+              bundle.textarea.dispatchEvent(new Event("input", { bubbles: true }));
+              bundle.textarea.dispatchEvent(new Event("change", { bubbles: true }));
+              bundle.textarea.value = value;
+              bundle.textarea.dispatchEvent(new Event("input", { bubbles: true }));
+              bundle.textarea.dispatchEvent(new Event("change", { bubbles: true }));
+              pushAttempt({ source, method: "textarea.value-clear-then-set", ok: true, beforeLength: before.length, afterLength: value.length });
+              return true;
+            } catch (error) {
+              pushAttempt({ source, method: "textarea.value-clear-then-set", ok: false, error: error && error.message ? error.message : String(error) });
+              return false;
+            }
+          };
+
+          const changedFrom = (baseline) => {
+            const next = readState(bundle);
+            const valueChanged = next.value !== baseline.value;
+            const canvasChanged = baseline.canvas !== null && next.canvas !== null && baseline.canvas !== next.canvas;
+            const anyVisibleCanvasChanged = baseline.visible.serial !== next.visible.serial;
+            const hasVisibleCanvas = baseline.visible.count > 0 || next.visible.count > 0 || Boolean(bundle.canvas);
+            const ok = hasVisibleCanvas ? (canvasChanged || anyVisibleCanvasChanged) : valueChanged;
+            return {
+              ok,
+              valueChanged,
+              canvasChanged,
+              anyVisibleCanvasChanged,
+              hasVisibleCanvas,
+              next
+            };
+          };
+
+          const invokeNoArgMethods = (target, source, methods) => {
+            if (!target) {
+              return false;
+            }
+            let any = false;
+            for (const method of methods) {
+              if (typeof target[method] !== "function") {
+                continue;
+              }
+              try {
+                target[method]();
+                pushAttempt({ source, method, ok: true });
+                any = true;
+              } catch (error) {
+                pushAttempt({ source, method, ok: false, error: error && error.message ? error.message : String(error) });
+              }
+            }
+            return any;
+          }
+
+          const orgFormulaEditor = window.org && window.org.mathdox && window.org.mathdox.formulaeditor
+            ? window.org.mathdox.formulaeditor
+            : null;
+          const formulaEditorClass = orgFormulaEditor && orgFormulaEditor.FormulaEditor ? orgFormulaEditor.FormulaEditor : null;
+
+          if (formulaEditorClass) {
+            const pickerCalls = [
+              { source: "FormulaEditor.getFocusedEditor", fn: "getFocusedEditor", args: [] },
+              { source: "FormulaEditor.getLastFocusedEditor", fn: "getLastFocusedEditor", args: [] },
+              { source: "FormulaEditor.getEditorByCanvas", fn: "getEditorByCanvas", args: [bundle.canvas] },
+              { source: "FormulaEditor.getEditorByCanvas(slot)", fn: "getEditorByCanvas", args: [bundle.slot] },
+              { source: "FormulaEditor.getEditorByTextArea", fn: "getEditorByTextArea", args: [bundle.textarea] },
+              { source: "FormulaEditor.getEditorByTextArea(id)", fn: "getEditorByTextArea", args: [bundle.textarea ? bundle.textarea.id : null] }
+            ];
+
+            for (const call of pickerCalls) {
+              const hasNullArgs = call.args.some((arg) => arg === null || arg === undefined || arg === "");
+              if (hasNullArgs) {
+                continue;
+              }
+              if (typeof formulaEditorClass[call.fn] !== "function") {
+                continue;
+              }
+              try {
+                const editor = formulaEditorClass[call.fn](...call.args);
+                if (editor) {
+                  pushAttempt({ source: call.source, method: call.fn, ok: true, returnedEditor: true });
+                  addEditor(call.source, editor);
+                } else {
+                  pushAttempt({ source: call.source, method: call.fn, ok: true, returnedEditor: false });
+                }
+              } catch (error) {
+                pushAttempt({ source: call.source, method: call.fn, ok: false, error: error && error.message ? error.message : String(error) });
+              }
+            }
+
+            const scanForEditors = (host, source) => {
+              if (!host || (typeof host !== "object" && typeof host !== "function")) {
+                return;
+              }
+              for (const key of Object.getOwnPropertyNames(host)) {
+                if (!/(editor|instance|list|pool|registry|cache)/i.test(key)) {
+                  continue;
+                }
+                let value;
+                try {
+                  value = host[key];
+                } catch (_error) {
+                  continue;
+                }
+                if (Array.isArray(value)) {
+                  for (let idx = 0; idx < value.length; idx += 1) {
+                    addEditor(`${source}.${key}[${idx}]`, value[idx]);
+                  }
+                } else if (value && typeof value === "object") {
+                  addEditor(`${source}.${key}`, value);
+                }
+              }
+            };
+
+            scanForEditors(formulaEditorClass, "FormulaEditor");
+            scanForEditors(orgFormulaEditor, "org.mathdox.formulaeditor");
+          }
+
+          const runClassSync = (source) => invokeNoArgMethods(formulaEditorClass, source, [
+            "updateByTextAreas",
+            "redrawAll",
+            "cleanupTextareas",
+            "cleanupEditors"
+          ]);
+
+          const runEditorSync = (editor, source) => invokeNoArgMethods(editor, source, [
+            "update",
+            "redraw",
+            "draw",
+            "refresh",
+            "render",
+            "rebuild",
+            "repaint",
+            "save"
+          ]);
+
+          setTextareaValue(rawFormula, "textarea-seed");
+          runClassSync("FormulaEditor.class-sync-before");
+
+          const methodPriority = [
+            "insertText",
+            "insertString",
+            "setText",
+            "setValue",
+            "setExpression",
+            "setExpressionString",
+            "setExpressionFromString",
+            "setInput",
+            "setMath",
+            "loadText",
+            "loadLatex",
+            "fromLatex",
+            "parse",
+            "write"
+          ];
+
+          const tryMethod = (editorRef, source, methodName, args) => {
+            if (!editorRef || typeof editorRef[methodName] !== "function") {
+              return false;
+            }
+            try {
+              editorRef[methodName](...args);
+              pushAttempt({ source, method: methodName, ok: true, argsShape: args.map((arg) => (arg === null ? "null" : typeof arg)) });
+              return true;
+            } catch (error) {
+              pushAttempt({ source, method: methodName, ok: false, error: error && error.message ? error.message : String(error) });
+              return false;
+            }
+          };
+
+          const keyCodeForChar = (ch) => {
+            if (!ch) {
+              return 0;
+            }
+            if (/^[0-9]$/.test(ch)) {
+              return ch.charCodeAt(0);
+            }
+            if (/^[a-z]$/i.test(ch)) {
+              return ch.charCodeAt(0);
+            }
+            const map = {
+              " ": 32,
+              "+": 43,
+              "-": 45,
+              "*": 42,
+              "/": 47,
+              "^": 94,
+              "(": 40,
+              ")": 41,
+              ".": 46,
+              ",": 44,
+              "=": 61,
+              "<": 60,
+              ">": 62
+            };
+            return map[ch] || ch.charCodeAt(0) || 0;
+          };
+
+          const sendEditorKeydown = (editorRef, source, key, keyCode, meta) => {
+            if (!editorRef || typeof editorRef.onkeydown !== "function") {
+              return false;
+            }
+            try {
+              editorRef.onkeydown({
+                key,
+                code: key,
+                keyCode,
+                which: keyCode,
+                charCode: 0,
+                preventDefault: () => {},
+                stopPropagation: () => {}
+              });
+              pushAttempt({ source, method: `onkeydown(${key})`, ok: true, ...(meta || {}) });
+              return true;
+            } catch (error) {
+              pushAttempt({ source, method: `onkeydown(${key})`, ok: false, error: error && error.message ? error.message : String(error), ...(meta || {}) });
+              return false;
+            }
+          };
+
+          const editorEntries = [...potentialEditors].filter((entry) => entry.editor && typeof entry.editor === "object");
+
+          for (const entry of editorEntries) {
+            const methods = methodList(entry.editor);
+            const dynamic = methods.filter((name) => {
+              const lower = String(name || "").toLowerCase();
+              if (!lower) {
+                return false;
+              }
+              if (lower.startsWith("setup")) {
+                return false;
+              }
+              if (/(insert|load|from|parse|write|replace)/.test(lower)) {
+                return true;
+              }
+              if (lower.startsWith("set") && /(text|value|expr|latex|mathml|input|string)/.test(lower)) {
+                return true;
+              }
+              return false;
+            });
+            const ordered = [...methodPriority, ...dynamic.filter((name) => !methodPriority.includes(name))];
+
+            for (const method of ordered) {
+              const methodLower = String(method || "").toLowerCase();
+              if (methodLower.startsWith("setup")) {
+                continue;
+              }
+              if (methodLower.includes("mathml") && !/^\s*</.test(rawFormula)) {
+                continue;
+              }
+              if (methodLower === "load" && !/^\s*</.test(rawFormula)) {
+                continue;
+              }
+
+              const invoked = tryMethod(entry.editor, entry.source, method, [rawFormula]) ||
+                tryMethod(entry.editor, entry.source, method, [rawFormula, false]) ||
+                tryMethod(entry.editor, entry.source, method, [rawFormula, bundle.textarea]) ||
+                tryMethod(entry.editor, entry.source, method, [bundle.textarea, rawFormula]);
+
+              if (!invoked) {
+                continue;
+              }
+
+              runEditorSync(entry.editor, `${entry.source}.sync`);
+              runClassSync("FormulaEditor.class-sync-after-method");
+              const changed = changedFrom(beforeState);
+              if (changed.ok) {
+                return {
+                  ok: true,
+                  valueChanged: changed.valueChanged,
+                  canvasChanged: changed.canvasChanged,
+                  anyVisibleCanvasChanged: changed.anyVisibleCanvasChanged,
+                  beforeLength: beforeState.value.length,
+                  afterLength: changed.next.value.length,
+                  attemptedMethods: attempts,
+                  orgMathDoxAvailable: Boolean(orgFormulaEditor),
+                  slotTag: bundle.slot.tagName || null,
+                  slotClassName: bundle.slot.className || null,
+                  textareaClassName: bundle.textarea ? (bundle.textarea.className || null) : null,
+                  discoveredEditorMethods: editorEntries.map((candidate) => ({
+                    source: candidate.source,
+                    methodsSample: methodList(candidate.editor).slice(0, 80)
+                  }))
+                };
+              }
+            }
+          }
+
+          for (const entry of editorEntries) {
+            const editor = entry.editor;
+            if (!editor || typeof editor.onkeypress !== "function") {
+              continue;
+            }
+
+            try {
+              if (typeof editor.focus === "function") {
+                editor.focus();
+                pushAttempt({ source: entry.source, method: "focus", ok: true });
+              }
+            } catch (error) {
+              pushAttempt({ source: entry.source, method: "focus", ok: false, error: error && error.message ? error.message : String(error) });
+            }
+
+            try {
+              if (typeof editor.clearEditor === "function") {
+                editor.clearEditor();
+                pushAttempt({ source: entry.source, method: "clearEditor", ok: true });
+              }
+            } catch (error) {
+              pushAttempt({ source: entry.source, method: "clearEditor", ok: false, error: error && error.message ? error.message : String(error) });
+            }
+
+            let anyKeyOk = false;
+            const chars = [...rawFormula];
+            let scriptState = {
+              active: false,
+              grouped: false,
+              depth: 0,
+              sourceOperator: null
+            };
+            let pendingContainerExitAfterScript = false;
+
+            for (let index = 0; index < chars.length; index += 1) {
+              const ch = chars[index];
+              const next = index + 1 < chars.length ? chars[index + 1] : "";
+
+              if (pendingContainerExitAfterScript) {
+                if (ch === ")" || ch === "}") {
+                  sendEditorKeydown(editor, entry.source, "ArrowRight", 39, {
+                    reason: "script-exit-container",
+                    trigger: ch
+                  });
+                }
+                pendingContainerExitAfterScript = false;
+              }
+
+              const code = keyCodeForChar(ch);
+              try {
+                const keyEvent = {
+                  key: ch,
+                  charCode: code,
+                  keyCode: code,
+                  which: code,
+                  shiftKey: /^[A-Z]$/.test(ch),
+                  preventDefault: () => {},
+                  stopPropagation: () => {}
+                };
+                editor.onkeypress(keyEvent);
+                pushAttempt({ source: entry.source, method: "onkeypress", ok: true, key: ch, keyCode: code });
+                anyKeyOk = true;
+              } catch (error) {
+                pushAttempt({ source: entry.source, method: "onkeypress", ok: false, key: ch, keyCode: code, error: error && error.message ? error.message : String(error) });
+                anyKeyOk = false;
+                break;
+              }
+
+              if (scriptState.active) {
+                if (!scriptState.grouped) {
+                  if (ch === "(" || ch === "{") {
+                    scriptState.grouped = true;
+                    scriptState.depth = 1;
+                  } else {
+                    const nextIsScriptAtom = /^[A-Za-z0-9]$/.test(next);
+                    if (!nextIsScriptAtom) {
+                      sendEditorKeydown(editor, entry.source, "ArrowRight", 39, { reason: "script-exit", operator: scriptState.sourceOperator });
+                      if (next === ")" || next === "}") {
+                        pendingContainerExitAfterScript = true;
+                      }
+                      scriptState = { active: false, grouped: false, depth: 0, sourceOperator: null };
+                    }
+                  }
+                } else {
+                  if (ch === "(" || ch === "{") {
+                    scriptState.depth += 1;
+                  } else if (ch === ")" || ch === "}") {
+                    scriptState.depth -= 1;
+                  }
+
+                  if (scriptState.depth <= 0) {
+                    sendEditorKeydown(editor, entry.source, "ArrowRight", 39, { reason: "script-exit-group", operator: scriptState.sourceOperator });
+                    if (next === ")" || next === "}") {
+                      pendingContainerExitAfterScript = true;
+                    }
+                    scriptState = { active: false, grouped: false, depth: 0, sourceOperator: null };
+                  }
+                }
+              } else if (ch === "_" || ch === "^") {
+                scriptState = {
+                  active: true,
+                  grouped: false,
+                  depth: 0,
+                  sourceOperator: ch
+                };
+              }
+            }
+
+            if (!anyKeyOk) {
+              continue;
+            }
+
+            if (scriptState.active) {
+              sendEditorKeydown(editor, entry.source, "ArrowRight", 39, { reason: "script-exit-final", operator: scriptState.sourceOperator });
+            }
+            if (pendingContainerExitAfterScript) {
+              sendEditorKeydown(editor, entry.source, "ArrowRight", 39, { reason: "script-exit-container-final" });
+              pendingContainerExitAfterScript = false;
+            }
+
+            try {
+              sendEditorKeydown(editor, entry.source, "Enter", 13);
+            } catch (error) {
+              pushAttempt({ source: entry.source, method: "onkeydown(Enter)", ok: false, error: error && error.message ? error.message : String(error) });
+            }
+
+            runEditorSync(editor, `${entry.source}.sync-keypress`);
+            runClassSync("FormulaEditor.class-sync-after-keypress");
+
+            const changed = changedFrom(beforeState);
+            if (changed.ok) {
+              return {
+                ok: true,
+                valueChanged: changed.valueChanged,
+                canvasChanged: changed.canvasChanged,
+                anyVisibleCanvasChanged: changed.anyVisibleCanvasChanged,
+                beforeLength: beforeState.value.length,
+                afterLength: changed.next.value.length,
+                attemptedMethods: attempts,
+                orgMathDoxAvailable: Boolean(orgFormulaEditor),
+                slotTag: bundle.slot.tagName || null,
+                slotClassName: bundle.slot.className || null,
+                textareaClassName: bundle.textarea ? (bundle.textarea.className || null) : null,
+                discoveredEditorMethods: editorEntries.map((candidate) => ({
+                  source: candidate.source,
+                  methodsSample: methodList(candidate.editor).slice(0, 80)
+                }))
+              };
+            }
+          }
+
+          if (bundle.textarea) {
+            bundle.textarea.focus();
+            if (typeof bundle.textarea.setSelectionRange === "function") {
+              bundle.textarea.setSelectionRange(0, bundle.textarea.value.length);
+            }
+            try {
+              const execOk = document.execCommand("insertText", false, rawFormula);
+              pushAttempt({ source: "textarea", method: "execCommand(insertText)", ok: execOk });
+            } catch (error) {
+              pushAttempt({ source: "textarea", method: "execCommand(insertText)", ok: false, error: error && error.message ? error.message : String(error) });
+            }
+          }
+
+          runClassSync("FormulaEditor.class-sync-final");
+
+          const changed = changedFrom(beforeState);
+
+          return {
+            ok: changed.ok,
+            error: changed.ok ? undefined : "No visible canvas change after MAIN world API attempts.",
+            valueChanged: changed.valueChanged,
+            canvasChanged: changed.canvasChanged,
+            anyVisibleCanvasChanged: changed.anyVisibleCanvasChanged,
+            beforeLength: beforeState.value.length,
+            afterLength: changed.next.value.length,
+            attemptedMethods: attempts,
+            orgMathDoxAvailable: Boolean(orgFormulaEditor),
+            slotTag: bundle.slot.tagName || null,
+            slotClassName: bundle.slot.className || null,
+            textareaClassName: bundle.textarea ? (bundle.textarea.className || null) : null,
+            discoveredEditorMethods: potentialEditors.map((entry) => ({
+              source: entry.source,
+              methodsSample: methodList(entry.editor).slice(0, 80)
+            }))
+          };
+        }
+      },
+      (results) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+
+        const debugFrames = (results || []).map((entry) => ({
+          frameId: entry.frameId,
+          result: entry.result || null
+        }));
+
+        const successful = (results || []).find((entry) => entry && entry.result && entry.result.ok);
+        if (successful) {
+          resolve({ ok: true, debugFrames, ...successful.result });
+          return;
+        }
+
+        const firstError = debugFrames
+          .map((entry) => entry.result && entry.result.error)
+          .find(Boolean);
+
+        resolve({ ok: false, error: firstError || "MAIN world MathDox API insertion failed.", debugFrames });
       }
     );
   });
@@ -1623,10 +2935,14 @@ function directInsertFallback(tabId, formula) {
   });
 }
 
-async function sendInsertToAnyFrame(tabId, formula) {
+async function sendInsertToAnyFrame(tabId, formula, preferredFrameIds) {
   const frameDetails = await getFrameDetails(tabId);
-  const frameIds = [...new Set(frameDetails.map((frame) => frame.frameId))];
-  const lastErrors = [];
+  const preferred = Array.isArray(preferredFrameIds) && preferredFrameIds.length > 0
+    ? preferredFrameIds
+    : frameDetails.map((frame) => frame.frameId);
+  const frameIds = [...new Set(preferred)];
+  const fatalErrors = [];
+  const ignoredErrors = [];
   const attempts = [];
 
   for (const frameId of frameIds) {
@@ -1637,11 +2953,18 @@ async function sendInsertToAnyFrame(tabId, formula) {
     }
 
     if (result.error) {
-      lastErrors.push(result.error);
+      if (result.error.includes("Receiving end does not exist")) {
+        ignoredErrors.push(result.error);
+      } else {
+        fatalErrors.push(result.error);
+      }
     }
   }
 
-  const fallbackMessage = lastErrors[lastErrors.length - 1] || "Insertion failed in all frames.";
+  const fallbackMessage =
+    fatalErrors[fatalErrors.length - 1] ||
+    ignoredErrors[ignoredErrors.length - 1] ||
+    "Insertion failed in all frames.";
   return { ok: false, error: fallbackMessage, attempts, frameIds, frameDetails };
 }
 
@@ -1656,8 +2979,13 @@ async function insertIntoPage() {
   }
 
   const wrapped = wrapFormula(raw, insertMode.value);
-  const formula = sowisoConvert.checked ? convertLatexToSowisoLinear(wrapped) : wrapped;
-  appendDebug("Prepared formula", { wrapped, formula });
+  const autoConvert = !sowisoConvert.checked && /\\[a-zA-Z]+|[_^{}]/.test(wrapped);
+  const effectiveConvert = sowisoConvert.checked || autoConvert;
+  const formula = effectiveConvert ? convertLatexToSowisoLinear(wrapped) : wrapped;
+  appendDebug("Prepared formula", { wrapped, formula, effectiveConvert, autoConvert });
+  if (autoConvert) {
+    appendDebug("Auto-converted complex LaTeX for Sowiso input");
+  }
   const activeTab = await getActiveTab();
   appendDebug("Active tab", {
     id: activeTab && activeTab.id,
@@ -1693,30 +3021,53 @@ async function insertIntoPage() {
     return;
   }
 
-  const debuggerResult = await debuggerTypeInsert(activeTab.id, formula);
-  appendDebug("Debugger typing result", debuggerResult);
-  if (debuggerResult.ok) {
+  const slotKeyTypeResult = await sowisoSlotKeyTypeInsert(activeTab.id, formula);
+  appendDebug("Direct slot key typing result", slotKeyTypeResult);
+  if (slotKeyTypeResult.ok) {
     setStatus("Formula inserted.", false);
-    appendDebug("Completed via debugger typing");
+    appendDebug("Completed via direct slot key typing");
     return;
   }
 
-  const keyboardResult = await sowisoKeyboardInsert(activeTab.id, formula);
-  appendDebug("Keyboard insert result", keyboardResult);
-  if (keyboardResult.ok) {
-    if (keyboardResult.failed) {
-      setStatus(`Partially inserted. Missing: ${keyboardResult.failed}`, true);
-      appendDebug("Keyboard insert partial", { failed: keyboardResult.failed });
-      return;
-    }
-
+  const mainWorldApiResult = await sowisoMainWorldApiInsert(activeTab.id, formula);
+  appendDebug("MAIN world MathDox API result", mainWorldApiResult);
+  if (mainWorldApiResult.ok) {
     setStatus("Formula inserted.", false);
-    appendDebug("Completed via keyboard simulation");
+    appendDebug("Completed via MAIN world MathDox API");
     return;
   }
 
-  setStatus(keyboardResult.error || "Insertion failed.", true);
-  appendDebug("Stopped: keyboard path failed (fallbacks disabled for safety)", keyboardResult);
+  const frameInsertResult = await sendInsertToAnyFrame(activeTab.id, formula, injection.injectedFrames);
+  appendDebug("Content script direct insert result", frameInsertResult);
+  if (frameInsertResult.ok) {
+    setStatus("Formula inserted.", false);
+    appendDebug("Completed via content script insertion");
+    return;
+  }
+
+  const directFallbackResult = await directInsertFallback(activeTab.id, formula);
+  appendDebug("Direct insertion fallback result", directFallbackResult);
+  if (directFallbackResult.ok) {
+    setStatus("Formula inserted.", false);
+    appendDebug("Completed via direct insertion fallback");
+    return;
+  }
+
+  const failureMessage =
+    mathdoxResult.error ||
+    slotKeyTypeResult.error ||
+    mainWorldApiResult.error ||
+    frameInsertResult.error ||
+    directFallbackResult.error ||
+    "Direct insertion failed.";
+  setStatus(failureMessage, true);
+  appendDebug("Stopped: all direct insertion paths failed", {
+    mathdoxResult,
+    slotKeyTypeResult,
+    mainWorldApiResult,
+    frameInsertResult,
+    directFallbackResult
+  });
 }
 
 previewImage.addEventListener("load", () => {
@@ -1766,6 +3117,12 @@ if (clearDebugButton) {
       debugLogEl.textContent = "";
     }
     appendDebug("Debug log cleared");
+  });
+}
+
+if (copyDebugButton) {
+  copyDebugButton.addEventListener("click", () => {
+    copyDebugLog();
   });
 }
 

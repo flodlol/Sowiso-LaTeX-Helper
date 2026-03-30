@@ -34,6 +34,7 @@ const EDITABLE_SELECTORS = [
 let lastFocusedEditable = null;
 let lastInteractedElement = null;
 const DEBUG_PREFIX = "[SowisoHelper][content]";
+const LAST_SLOT_ATTR = "data-sowiso-helper-last-slot";
 
 function describeElement(element) {
   if (!element || !(element instanceof Element)) {
@@ -112,6 +113,107 @@ function isLikelySowisoMathTextarea(element) {
 
   const className = (element.className || "").toLowerCase();
   return className.includes("math-editor") || className.includes("mathdoxformula");
+}
+
+function readCanvasSignature(canvas) {
+  if (!(canvas instanceof HTMLCanvasElement) || typeof canvas.toDataURL !== "function") {
+    return null;
+  }
+  try {
+    return canvas.toDataURL();
+  } catch (_error) {
+    return null;
+  }
+}
+
+function visibleMathCanvasSnapshot() {
+  const canvases = [...document.querySelectorAll("td[class*='pre_input'] + td canvas.mathdoxformula, table.input_table td.pre_input_text + td canvas.mathdoxformula, canvas.mathdoxformula")]
+    .filter((canvas) => canvas instanceof HTMLCanvasElement && isVisible(canvas));
+  const serial = canvases.map((canvas) => readCanvasSignature(canvas)).join("||");
+  return { count: canvases.length, serial };
+}
+
+function linkedCanvasForTextarea(textarea) {
+  if (!(textarea instanceof HTMLTextAreaElement)) {
+    return null;
+  }
+  const td = textarea.closest("td");
+  if (!td) {
+    return null;
+  }
+  const canvas = td.querySelector("canvas.mathdoxformula");
+  return canvas instanceof HTMLCanvasElement ? canvas : null;
+}
+
+function resolveMathSlotFromElement(element) {
+  if (!element || !(element instanceof Element)) {
+    return null;
+  }
+
+  const directCanvas = element instanceof HTMLCanvasElement && element.classList.contains("mathdoxformula")
+    ? element
+    : null;
+  if (directCanvas) {
+    return directCanvas;
+  }
+
+  const closestCanvas = element.closest("canvas.mathdoxformula");
+  if (closestCanvas instanceof HTMLCanvasElement) {
+    return closestCanvas;
+  }
+
+  const td = element.closest("td");
+  if (!td) {
+    return null;
+  }
+
+  const canvas = td.querySelector("canvas.mathdoxformula");
+  if (canvas instanceof HTMLCanvasElement) {
+    return canvas;
+  }
+
+  return null;
+}
+
+function markLastMathSlot(element) {
+  const slotCanvas = resolveMathSlotFromElement(element);
+  if (!(slotCanvas instanceof HTMLElement)) {
+    return;
+  }
+
+  for (const previous of document.querySelectorAll(`[${LAST_SLOT_ATTR}='1']`)) {
+    previous.removeAttribute(LAST_SLOT_ATTR);
+  }
+  const td = slotCanvas.closest("td");
+  if (td instanceof HTMLElement) {
+    const anchored = td.querySelector("[tabindex]");
+    if (anchored instanceof HTMLElement) {
+      anchored.setAttribute(LAST_SLOT_ATTR, "1");
+    }
+  }
+  slotCanvas.setAttribute(LAST_SLOT_ATTR, "1");
+}
+
+function resolveMarkedMathTextarea() {
+  const markedNodes = [...document.querySelectorAll(`[${LAST_SLOT_ATTR}='1']`)];
+  if (markedNodes.length === 0) {
+    return null;
+  }
+
+  const markedCanvas = markedNodes.find((node) => node instanceof HTMLCanvasElement && node.classList.contains("mathdoxformula"));
+  const markedAnchor = markedNodes.find((node) => node instanceof HTMLElement && node.hasAttribute("tabindex"));
+  const marked = (markedCanvas || markedAnchor || markedNodes[0]);
+  if (!(marked instanceof HTMLElement)) {
+    return null;
+  }
+
+  const td = marked.closest("td");
+  if (!td) {
+    return null;
+  }
+
+  const textarea = td.querySelector("textarea.mathdoxformula, textarea.math-editor, textarea[class*='mathdox'], textarea[class*='math-editor']");
+  return textarea instanceof HTMLTextAreaElement ? textarea : null;
 }
 
 function dispatchEditEvents(element, text = "") {
@@ -269,11 +371,13 @@ function focusAndResolveFromElement(element) {
 }
 
 function insertFormula(formula) {
-  let target = resolveInsertionTarget();
+  const markedMathTextarea = resolveMarkedMathTextarea();
+  let target = markedMathTextarea || resolveInsertionTarget();
   const debug = {
     activeElement: describeElement(document.activeElement),
     lastFocused: describeElement(lastFocusedEditable),
-    lastInteracted: describeElement(lastInteractedElement)
+    lastInteracted: describeElement(lastInteractedElement),
+    markedMathTextarea: describeElement(markedMathTextarea)
   };
 
   if (!target && lastInteractedElement) {
@@ -288,9 +392,33 @@ function insertFormula(formula) {
 
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
     if (isLikelySowisoMathTextarea(target)) {
-      debug.method = "text-control";
-      debug.mathTextareaHidden = !isVisible(target);
-      return { ok: false, error: "Detected hidden MathDox textarea. Click the pink input slot and use keyboard insertion.", debug };
+      debug.method = "mathdox-execcommand";
+      const linkedCanvas = linkedCanvasForTextarea(target);
+      const beforeCanvas = readCanvasSignature(linkedCanvas);
+      const beforeVisibleCanvas = visibleMathCanvasSnapshot();
+      target.focus();
+      if (typeof target.setSelectionRange === "function") {
+        target.setSelectionRange(0, target.value.length);
+      }
+      let ok = false;
+      try {
+        ok = document.execCommand("insertText", false, formula);
+      } catch (_error) {
+        ok = false;
+      }
+      debug.execCommandWorked = ok;
+      debug.valueMatches = target.value === formula;
+      const afterCanvas = readCanvasSignature(linkedCanvas);
+      const afterVisibleCanvas = visibleMathCanvasSnapshot();
+      debug.canvasChanged = beforeCanvas !== null && afterCanvas !== null && beforeCanvas !== afterCanvas;
+      debug.anyVisibleCanvasChanged = beforeVisibleCanvas.serial !== afterVisibleCanvas.serial;
+      debug.hasVisibleCanvas = beforeVisibleCanvas.count > 0 || afterVisibleCanvas.count > 0 || Boolean(linkedCanvas);
+      const visibleEffect = debug.canvasChanged || debug.anyVisibleCanvasChanged;
+
+      if ((debug.hasVisibleCanvas && visibleEffect) || (!debug.hasVisibleCanvas && target.value === formula)) {
+        return { ok: true, debug };
+      }
+      return { ok: false, error: "MathDox execCommand updated hidden value but no visible slot changed.", debug };
     }
 
     const textResult = insertIntoTextControl(target, formula);
@@ -320,9 +448,33 @@ function insertFormula(formula) {
 
   if (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement) {
     if (isLikelySowisoMathTextarea(focused)) {
-      debug.method = "focused-text-control";
-      debug.mathTextareaHidden = !isVisible(focused);
-      return { ok: false, error: "Focused target is hidden MathDox textarea. Click the pink input slot and use keyboard insertion.", debug };
+      debug.method = "focused-mathdox-execcommand";
+      const linkedCanvas = linkedCanvasForTextarea(focused);
+      const beforeCanvas = readCanvasSignature(linkedCanvas);
+      const beforeVisibleCanvas = visibleMathCanvasSnapshot();
+      focused.focus();
+      if (typeof focused.setSelectionRange === "function") {
+        focused.setSelectionRange(0, focused.value.length);
+      }
+      let ok = false;
+      try {
+        ok = document.execCommand("insertText", false, formula);
+      } catch (_error) {
+        ok = false;
+      }
+      debug.execCommandWorked = ok;
+      debug.valueMatches = focused.value === formula;
+      const afterCanvas = readCanvasSignature(linkedCanvas);
+      const afterVisibleCanvas = visibleMathCanvasSnapshot();
+      debug.canvasChanged = beforeCanvas !== null && afterCanvas !== null && beforeCanvas !== afterCanvas;
+      debug.anyVisibleCanvasChanged = beforeVisibleCanvas.serial !== afterVisibleCanvas.serial;
+      debug.hasVisibleCanvas = beforeVisibleCanvas.count > 0 || afterVisibleCanvas.count > 0 || Boolean(linkedCanvas);
+      const visibleEffect = debug.canvasChanged || debug.anyVisibleCanvasChanged;
+
+      if ((debug.hasVisibleCanvas && visibleEffect) || (!debug.hasVisibleCanvas && focused.value === formula)) {
+        return { ok: true, debug };
+      }
+      return { ok: false, error: "Focused MathDox execCommand updated hidden value but no visible slot changed.", debug };
     }
 
     const textResult = insertIntoTextControl(focused, formula);
@@ -348,6 +500,10 @@ function insertFormula(formula) {
 document.addEventListener(
   "focusin",
   (event) => {
+    if (event.target instanceof Element) {
+      markLastMathSlot(event.target);
+    }
+
     const editable = normalizeEditable(event.target);
     if (editable) {
       lastFocusedEditable = editable;
@@ -361,6 +517,7 @@ document.addEventListener(
   (event) => {
     if (event.target instanceof Element) {
       lastInteractedElement = event.target;
+      markLastMathSlot(event.target);
     }
   },
   true
