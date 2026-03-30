@@ -186,11 +186,11 @@ function replaceSqrtLatex(input) {
 }
 
 function isAsciiLetter(ch) {
-  return /^[A-Za-z]$/.test(ch);
+  return /^\p{L}$/u.test(ch);
 }
 
 function isIdentifierToken(token) {
-  return /^[A-Za-z]+$/.test(token);
+  return /^[\p{L}]+$/u.test(token);
 }
 
 function isNumberToken(token) {
@@ -199,6 +199,10 @@ function isNumberToken(token) {
 
 function isOperatorToken(token) {
   return /^[+\-*/^=<>!&,|]$/.test(token) || token === "<=" || token === ">=" || token === "!=" || token === "_";
+}
+
+function isScriptToken(token) {
+  return typeof token === "string" && (token.startsWith("_") || token.startsWith("^"));
 }
 
 function tokenizeLinearExpression(input) {
@@ -217,6 +221,42 @@ function tokenizeLinearExpression(input) {
     if (two === "<=" || two === ">=" || two === "!=") {
       tokens.push(two);
       i += 2;
+      continue;
+    }
+
+    if (ch === "_" || ch === "^") {
+      const marker = ch;
+      i += 1;
+
+      if (i < input.length && input[i] === "(") {
+        let depth = 0;
+        const start = i;
+        while (i < input.length) {
+          const groupCh = input[i];
+          if (groupCh === "(") {
+            depth += 1;
+          } else if (groupCh === ")") {
+            depth -= 1;
+            if (depth === 0) {
+              i += 1;
+              break;
+            }
+          }
+          i += 1;
+        }
+        tokens.push(`${marker}${input.slice(start, i)}`);
+        continue;
+      }
+
+      const start = i;
+      while (i < input.length && /[\p{L}0-9]/u.test(input[i])) {
+        i += 1;
+      }
+      if (i > start) {
+        tokens.push(`${marker}${input.slice(start, i)}`);
+      } else {
+        tokens.push(marker);
+      }
       continue;
     }
 
@@ -306,6 +346,9 @@ function insertImplicitMultiplication(input) {
     if (prev === "_" || curr === "_") {
       return false;
     }
+    if (isScriptToken(prev) || isScriptToken(curr)) {
+      return false;
+    }
     if (isOperatorToken(prev) || isOperatorToken(curr)) {
       return false;
     }
@@ -332,25 +375,26 @@ function insertImplicitMultiplication(input) {
 
 function convertLatexToSowisoLinear(input) {
   const greekMap = {
-    "\\alpha": "alpha",
-    "\\beta": "beta",
-    "\\gamma": "gamma",
-    "\\delta": "delta",
-    "\\epsilon": "epsilon",
-    "\\theta": "theta",
-    "\\lambda": "lambda",
-    "\\mu": "mu",
-    "\\pi": "pi",
-    "\\rho": "rho",
-    "\\sigma": "sigma",
-    "\\tau": "tau",
-    "\\phi": "phi",
-    "\\omega": "omega"
+    "\\alpha": "α",
+    "\\beta": "β",
+    "\\gamma": "γ",
+    "\\delta": "δ",
+    "\\epsilon": "ε",
+    "\\theta": "θ",
+    "\\lambda": "λ",
+    "\\mu": "μ",
+    "\\pi": "π",
+    "\\rho": "ρ",
+    "\\sigma": "σ",
+    "\\tau": "τ",
+    "\\phi": "φ",
+    "\\omega": "ω"
   };
 
   let out = input || "";
   out = out.replace(/^\s*\$+|\$+\s*$/g, "");
   out = out.replace(/\\left|\\right|\\,/g, "");
+  out = out.replace(/\\(?:hat|widehat|vec|overrightarrow|bar|overline|underline)\s*\{([^{}]+)\}/g, "$1");
   out = out.replace(/\\cdot|\\times/g, "*");
   out = out.replace(/\\leq/g, "<=");
   out = out.replace(/\\geq/g, ">=");
@@ -1251,7 +1295,7 @@ function sowisoSlotKeyTypeInsert(tabId, formula) {
   });
 }
 
-function sowisoMainWorldApiInsert(tabId, formula) {
+function sowisoMainWorldApiInsert(tabId, formula, latexSource) {
   return new Promise((resolve) => {
     if (!chrome.scripting || typeof chrome.scripting.executeScript !== "function") {
       resolve({ ok: false, error: "Scripting API unavailable." });
@@ -1262,8 +1306,8 @@ function sowisoMainWorldApiInsert(tabId, formula) {
       {
         target: { tabId, allFrames: true },
         world: "MAIN",
-        args: [formula],
-        func: (rawFormula) => {
+        args: [formula, latexSource],
+        func: async (rawFormula, rawLatexSource) => {
           function isVisible(el) {
             if (!(el instanceof HTMLElement)) {
               return false;
@@ -1591,6 +1635,389 @@ function sowisoMainWorldApiInsert(tabId, formula) {
             scanForEditors(orgFormulaEditor, "org.mathdox.formulaeditor");
           }
 
+          const latexCandidateRaw = typeof rawLatexSource === "string" ? rawLatexSource.trim() : "";
+          const latexCandidate = latexCandidateRaw
+            .replace(/^\s*\$\$?/, "")
+            .replace(/\$\$?\s*$/, "")
+            .trim();
+          let preparedMathML = null;
+          const hasLatexCommands = /\\[A-Za-z]+/.test(latexCandidate || rawFormula);
+
+          const wrapMathML = (value) => {
+            const trimmed = typeof value === "string" ? value.trim() : "";
+            if (!trimmed) {
+              return "";
+            }
+            if (/^<\s*math[\s>]/i.test(trimmed)) {
+              return trimmed;
+            }
+            return `<math xmlns="http://www.w3.org/1998/Math/MathML">${trimmed}</math>`;
+          };
+
+          const buildPreparedMathML = (rawMathML, source) => {
+            const mathmlString = wrapMathML(rawMathML);
+            if (!mathmlString) {
+              return null;
+            }
+            try {
+              const parsedXml = new DOMParser().parseFromString(mathmlString, "application/xml");
+              const parseError = parsedXml.querySelector("parsererror");
+              if (parseError) {
+                pushAttempt({
+                  source,
+                  method: "parseMathML",
+                  ok: false,
+                  error: parseError.textContent ? parseError.textContent.trim().slice(0, 300) : "XML parsererror"
+                });
+                return null;
+              }
+
+              const root = parsedXml.documentElement;
+              if (!root || root.tagName.toLowerCase() !== "math") {
+                pushAttempt({ source, method: "parseMathML", ok: false, error: "Parsed MathML root was not <math>." });
+                return null;
+              }
+
+              const mathNs = "http://www.w3.org/1998/Math/MathML";
+              const allowedTags = new Set([
+                "math",
+                "mrow",
+                "mi",
+                "mn",
+                "mo",
+                "mtext",
+                "ms",
+                "mspace",
+                "mfrac",
+                "msqrt",
+                "mroot",
+                "msub",
+                "msup",
+                "msubsup",
+                "mover",
+                "munder",
+                "munderover",
+                "mfenced",
+                "mtable",
+                "mtr",
+                "mtd",
+                "mmultiscripts",
+                "mprescripts",
+                "none"
+              ]);
+              const tokenTags = new Set(["mi", "mn", "mo", "mtext", "ms"]);
+              const allowedAttrs = new Set([
+                "stretchy",
+                "form",
+                "fence",
+                "separator",
+                "separators",
+                "open",
+                "close",
+                "accent",
+                "accentunder",
+                "largeop",
+                "movablelimits",
+                "mathvariant",
+                "mathsize",
+                "mathcolor"
+              ]);
+
+              const sanitizeNode = (node, outDoc) => {
+                if (!node) {
+                  return null;
+                }
+
+                if (node.nodeType === Node.TEXT_NODE) {
+                  const text = node.textContent || "";
+                  return text.length > 0 ? outDoc.createTextNode(text) : null;
+                }
+
+                if (node.nodeType !== Node.ELEMENT_NODE) {
+                  return null;
+                }
+
+                const tag = (node.localName || node.nodeName || "").toLowerCase();
+                if (!tag) {
+                  return null;
+                }
+
+                if (tag === "annotation" || tag === "annotation-xml") {
+                  return null;
+                }
+
+                if (tag === "semantics") {
+                  const elementChildren = [...node.childNodes].filter((child) => child.nodeType === Node.ELEMENT_NODE);
+                  const preferred = elementChildren.find((child) => {
+                    const childTag = (child.localName || child.nodeName || "").toLowerCase();
+                    return childTag && childTag !== "annotation" && childTag !== "annotation-xml";
+                  });
+                  if (preferred) {
+                    return sanitizeNode(preferred, outDoc);
+                  }
+                  return null;
+                }
+
+                if (tag === "maction" || tag === "mstyle" || tag === "mpadded" || tag === "mphantom") {
+                  const childNodes = [...node.childNodes]
+                    .map((child) => sanitizeNode(child, outDoc))
+                    .filter(Boolean);
+                  if (childNodes.length === 0) {
+                    return null;
+                  }
+                  if (childNodes.length === 1) {
+                    return childNodes[0];
+                  }
+                  const wrapper = outDoc.createElementNS(mathNs, "mrow");
+                  for (const childNode of childNodes) {
+                    wrapper.appendChild(childNode);
+                  }
+                  return wrapper;
+                }
+
+                if (!allowedTags.has(tag)) {
+                  const childNodes = [...node.childNodes]
+                    .map((child) => sanitizeNode(child, outDoc))
+                    .filter(Boolean);
+                  if (childNodes.length === 0) {
+                    return null;
+                  }
+                  if (childNodes.length === 1) {
+                    return childNodes[0];
+                  }
+                  const wrapper = outDoc.createElementNS(mathNs, "mrow");
+                  for (const childNode of childNodes) {
+                    wrapper.appendChild(childNode);
+                  }
+                  return wrapper;
+                }
+
+                const outEl = outDoc.createElementNS(mathNs, tag);
+                if (node.attributes && node.attributes.length > 0) {
+                  for (const attr of node.attributes) {
+                    const name = (attr && attr.name) ? attr.name.toLowerCase() : "";
+                    if (!name || name.startsWith("data-")) {
+                      continue;
+                    }
+                    if (name === "class" || name === "id" || name === "style" || name === "xmlns") {
+                      continue;
+                    }
+                    if (!allowedAttrs.has(name)) {
+                      continue;
+                    }
+                    outEl.setAttribute(name, attr.value);
+                  }
+                }
+
+                const children = [...node.childNodes]
+                  .map((child) => sanitizeNode(child, outDoc))
+                  .filter(Boolean);
+
+                if (children.length > 0) {
+                  for (const child of children) {
+                    outEl.appendChild(child);
+                  }
+                } else if (tokenTags.has(tag)) {
+                  outEl.textContent = node.textContent || "";
+                }
+
+                return outEl;
+              };
+
+              const outDoc = document.implementation.createDocument(mathNs, "math", null);
+              const sanitized = sanitizeNode(root, outDoc);
+              if (!sanitized) {
+                pushAttempt({ source, method: "sanitizeMathML", ok: false, error: "Sanitizer produced empty output." });
+                return null;
+              }
+
+              const outRoot = outDoc.documentElement;
+              while (outRoot.firstChild) {
+                outRoot.removeChild(outRoot.firstChild);
+              }
+
+              if (sanitized.nodeType === Node.ELEMENT_NODE && sanitized.localName && sanitized.localName.toLowerCase() === "math") {
+                for (const child of [...sanitized.childNodes]) {
+                  outRoot.appendChild(child.cloneNode(true));
+                }
+              } else {
+                outRoot.appendChild(sanitized);
+              }
+
+              const sanitizedString = new XMLSerializer().serializeToString(outRoot);
+              return { string: sanitizedString, node: null };
+            } catch (error) {
+              pushAttempt({
+                source,
+                method: "parseMathML",
+                ok: false,
+                error: error && error.message ? error.message : String(error)
+              });
+              return null;
+            }
+          };
+
+          const convertLatexViaMathJaxHub = async (latex) => {
+            const mj = window.MathJax;
+            const hub = mj && mj.Hub;
+            if (!hub || typeof hub.Queue !== "function" || typeof hub.getAllJax !== "function") {
+              pushAttempt({
+                source: "MathJax.Hub",
+                method: "availability",
+                ok: false,
+                error: "MathJax Hub API unavailable."
+              });
+              return null;
+            }
+
+            if (!(document.body instanceof HTMLElement)) {
+              pushAttempt({
+                source: "MathJax.Hub",
+                method: "availability",
+                ok: false,
+                error: "Document body unavailable."
+              });
+              return null;
+            }
+
+            return await new Promise((resolveMathML) => {
+              const host = document.createElement("span");
+              host.style.position = "fixed";
+              host.style.left = "-10000px";
+              host.style.top = "-10000px";
+              host.style.opacity = "0";
+              host.style.pointerEvents = "none";
+
+              const script = document.createElement("script");
+              script.type = "math/tex";
+              script.text = latex;
+              host.appendChild(script);
+              document.body.appendChild(host);
+
+              let settled = false;
+              const settle = (value, meta) => {
+                if (settled) {
+                  return;
+                }
+                settled = true;
+                window.clearTimeout(timeoutId);
+                try {
+                  host.remove();
+                } catch (_removeError) {
+                  // Ignore remove errors.
+                }
+                resolveMathML(value);
+                if (meta) {
+                  pushAttempt(meta);
+                }
+              };
+
+              const timeoutId = window.setTimeout(() => {
+                settle(null, {
+                  source: "MathJax.Hub",
+                  method: "toMathML",
+                  ok: false,
+                  error: "Timed out waiting for MathJax typeset."
+                });
+              }, 2000);
+
+              hub.Queue(
+                ["Typeset", hub, host],
+                () => {
+                  try {
+                    const allJax = hub.getAllJax(host);
+                    const jax = Array.isArray(allJax) && allJax.length > 0 ? allJax[0] : null;
+                    if (!jax || !jax.root || typeof jax.root.toMathML !== "function") {
+                      settle(null, {
+                        source: "MathJax.Hub",
+                        method: "toMathML",
+                        ok: false,
+                        error: "No MathJax Jax root available after typeset."
+                      });
+                      return;
+                    }
+
+                    const rawMathML = jax.root.toMathML("");
+                    const wrappedMathML = wrapMathML(rawMathML);
+                    settle(wrappedMathML, {
+                      source: "MathJax.Hub",
+                      method: "toMathML",
+                      ok: Boolean(wrappedMathML),
+                      latexLength: latex.length
+                    });
+                  } catch (error) {
+                    settle(null, {
+                      source: "MathJax.Hub",
+                      method: "toMathML",
+                      ok: false,
+                      error: error && error.message ? error.message : String(error)
+                    });
+                  }
+                }
+              );
+            });
+          };
+
+          if (hasLatexCommands) {
+            const hubMathML = await convertLatexViaMathJaxHub(latexCandidate || rawFormula);
+            if (hubMathML) {
+              preparedMathML = buildPreparedMathML(hubMathML, "MathJax.Hub");
+            }
+          }
+
+          if (!preparedMathML && hasLatexCommands) {
+            try {
+              const mj = window.MathJax;
+              const TeX = mj && mj.InputJax && mj.InputJax.TeX ? mj.InputJax.TeX : null;
+              if (TeX && typeof TeX.Parse === "function") {
+                const parsed = TeX.Parse(latexCandidate).mml();
+                if (parsed && typeof parsed.toMathML === "function") {
+                  let inner = "";
+                  let mathmlResultOk = false;
+                  try {
+                    inner = parsed.toMathML();
+                    mathmlResultOk = typeof inner === "string" && inner.trim().length > 0;
+                  } catch (primaryError) {
+                    pushAttempt({
+                      source: "MathJax.TeX.Parse",
+                      method: "toMathML()",
+                      ok: false,
+                      error: primaryError && primaryError.message ? primaryError.message : String(primaryError)
+                    });
+                  }
+                  if (!mathmlResultOk) {
+                    try {
+                      inner = parsed.toMathML("");
+                      mathmlResultOk = typeof inner === "string" && inner.trim().length > 0;
+                    } catch (secondaryError) {
+                      pushAttempt({
+                        source: "MathJax.TeX.Parse",
+                        method: "toMathML('')",
+                        ok: false,
+                        error: secondaryError && secondaryError.message ? secondaryError.message : String(secondaryError)
+                      });
+                    }
+                  }
+                  if (mathmlResultOk) {
+                    preparedMathML = buildPreparedMathML(inner, "MathJax.TeX.Parse");
+                    pushAttempt({
+                      source: "MathJax.TeX.Parse",
+                      method: "toMathML",
+                      ok: Boolean(preparedMathML),
+                      latexLength: latexCandidate.length
+                    });
+                  }
+                } else {
+                  pushAttempt({ source: "MathJax.TeX.Parse", method: "toMathML", ok: false, error: "Parsed TeX did not expose toMathML()." });
+                }
+              } else {
+                pushAttempt({ source: "MathJax.TeX.Parse", method: "availability", ok: false, error: "MathJax TeX parser unavailable." });
+              }
+            } catch (error) {
+              pushAttempt({ source: "MathJax.TeX.Parse", method: "toMathML", ok: false, error: error && error.message ? error.message : String(error) });
+            }
+          }
+
           const runClassSync = (source) => invokeNoArgMethods(formulaEditorClass, source, [
             "updateByTextAreas",
             "redrawAll",
@@ -1693,9 +2120,72 @@ function sowisoMainWorldApiInsert(tabId, formula) {
             }
           };
 
+          const tryLoadMathMLIntoEditor = (editorRef, source) => {
+            if (!preparedMathML || !editorRef || typeof editorRef.loadMathML !== "function") {
+              return false;
+            }
+
+            const candidates = [];
+            if (preparedMathML.string) {
+              candidates.push({ label: "string", value: preparedMathML.string });
+            }
+            if (preparedMathML.node) {
+              candidates.push({ label: "node", value: preparedMathML.node });
+            }
+
+            for (const candidate of candidates) {
+              try {
+                if (typeof editorRef.clearEditor === "function") {
+                  editorRef.clearEditor();
+                  pushAttempt({ source, method: "clearEditor(beforeLoadMathML)", ok: true });
+                }
+              } catch (error) {
+                pushAttempt({ source, method: "clearEditor(beforeLoadMathML)", ok: false, error: error && error.message ? error.message : String(error) });
+              }
+
+              try {
+                editorRef.loadMathML(candidate.value);
+                pushAttempt({ source, method: "loadMathML", ok: true, inputType: candidate.label });
+              } catch (error) {
+                pushAttempt({ source, method: "loadMathML", ok: false, inputType: candidate.label, error: error && error.message ? error.message : String(error) });
+                continue;
+              }
+
+              runEditorSync(editorRef, `${source}.sync-loadMathML`);
+              runClassSync("FormulaEditor.class-sync-after-loadMathML");
+              const changed = changedFrom(beforeState);
+              if (changed.ok) {
+                return true;
+              }
+            }
+
+            return false;
+          };
+
           const editorEntries = [...potentialEditors].filter((entry) => entry.editor && typeof entry.editor === "object");
 
           for (const entry of editorEntries) {
+            if (tryLoadMathMLIntoEditor(entry.editor, entry.source)) {
+              const changed = changedFrom(beforeState);
+              return {
+                ok: true,
+                valueChanged: changed.valueChanged,
+                canvasChanged: changed.canvasChanged,
+                anyVisibleCanvasChanged: changed.anyVisibleCanvasChanged,
+                beforeLength: beforeState.value.length,
+                afterLength: changed.next.value.length,
+                attemptedMethods: attempts,
+                orgMathDoxAvailable: Boolean(orgFormulaEditor),
+                slotTag: bundle.slot.tagName || null,
+                slotClassName: bundle.slot.className || null,
+                textareaClassName: bundle.textarea ? (bundle.textarea.className || null) : null,
+                discoveredEditorMethods: editorEntries.map((candidate) => ({
+                  source: candidate.source,
+                  methodsSample: methodList(candidate.editor).slice(0, 80)
+                }))
+              };
+            }
+
             const methods = methodList(entry.editor);
             const dynamic = methods.filter((name) => {
               const lower = String(name || "").toLowerCase();
@@ -1761,9 +2251,23 @@ function sowisoMainWorldApiInsert(tabId, formula) {
             }
           }
 
+          const rawFormulaHasCommands = /\\[A-Za-z]+/.test(rawFormula || "");
+          const allowKeypressFallback = !rawFormulaHasCommands;
+
           for (const entry of editorEntries) {
             const editor = entry.editor;
             if (!editor || typeof editor.onkeypress !== "function") {
+              continue;
+            }
+
+            if (!allowKeypressFallback) {
+              pushAttempt({
+                source: entry.source,
+                method: "onkeypress",
+                ok: false,
+                skipped: true,
+                reason: "Disabled for raw LaTeX commands without MathML conversion."
+              });
               continue;
             }
 
@@ -1835,7 +2339,7 @@ function sowisoMainWorldApiInsert(tabId, formula) {
                     scriptState.grouped = true;
                     scriptState.depth = 1;
                   } else {
-                    const nextIsScriptAtom = /^[A-Za-z0-9]$/.test(next);
+                    const nextIsScriptAtom = /^[\p{L}0-9]$/u.test(next);
                     if (!nextIsScriptAtom) {
                       sendEditorKeydown(editor, entry.source, "ArrowRight", 39, { reason: "script-exit", operator: scriptState.sourceOperator });
                       if (next === ")" || next === "}") {
@@ -2979,8 +3483,8 @@ async function insertIntoPage() {
   }
 
   const wrapped = wrapFormula(raw, insertMode.value);
-  const autoConvert = !sowisoConvert.checked && /\\[a-zA-Z]+|[_^{}]/.test(wrapped);
-  const effectiveConvert = sowisoConvert.checked || autoConvert;
+  const autoConvert = false;
+  const effectiveConvert = sowisoConvert.checked;
   const formula = effectiveConvert ? convertLatexToSowisoLinear(wrapped) : wrapped;
   appendDebug("Prepared formula", { wrapped, formula, effectiveConvert, autoConvert });
   if (autoConvert) {
@@ -3029,7 +3533,7 @@ async function insertIntoPage() {
     return;
   }
 
-  const mainWorldApiResult = await sowisoMainWorldApiInsert(activeTab.id, formula);
+  const mainWorldApiResult = await sowisoMainWorldApiInsert(activeTab.id, formula, wrapped);
   appendDebug("MAIN world MathDox API result", mainWorldApiResult);
   if (mainWorldApiResult.ok) {
     setStatus("Formula inserted.", false);
