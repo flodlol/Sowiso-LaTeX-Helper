@@ -36,4 +36,4 @@ This policy may be updated from time to time. Updates will be posted with a revi
 
 ## Contact
 
-For privacy questions, contact: [your-email@example.com](mailto:your-email@example.com)
+For privacy questions, contact: [jonas@study-track.app](mailto:jonas@study-track.app)

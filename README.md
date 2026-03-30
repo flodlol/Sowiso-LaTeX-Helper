@@ -1,10 +1,26 @@
-# Sowiso LaTeX Helper
+<div align="center">
+  <img src="public/logo/128.png" alt="Study-Track Logo" width="160">
+  <h1>Sowiso LaTeX Helper</h1>
+  <p>
+    Tiny Chrome extension I made to speed up writing math in Sowiso.<br>
+    
+  </p>
+  <p>
+    Language:
+    <a href="README.md">English</a> –
+    <a href="README.nl.md">Nederlands</a>
+  </p>
 
-Tiny Chrome extension I made to speed up writing math in Sowiso.
+</div>
 
-Language:
-- English (this file)
-- [Nederlands](README.nl.md)
+---
+
+<div align="center">
+	<img src="public/preview/preview.jpg" width="650">
+</div>
+
+---
+
 
 ## What It Does
 
@@ -20,10 +36,14 @@ Language:
 - Theme switcher: `Auto`, `Light`, `Dark`.
 - Includes a debug log (with copy/clear buttons) for quick troubleshooting.
 
+---
+
 ## Supported Pages
 
 - `https://cloud.sowiso.nl/*`
 - `https://*.sowiso.nl/*`
+
+---
 
 ## Install (Unpacked)
 
@@ -32,6 +52,8 @@ Language:
 3. Click `Load unpacked`.
 4. Select: `chrome-extension`
 5. (Optional) pin the extension in your toolbar.
+
+---
 
 ## How To Use
 
@@ -43,17 +65,25 @@ Language:
 6. (Optional) enable `Convert LaTeX to Sowiso linear input`.
 7. Click `Insert into page` or click the preview block.
 
+---
+
 ## Notes
 
 - Preview rendering uses CodeCogs (`https://latex.codecogs.com`) and needs internet access.
 - If insertion fails, click the answer field again and retry.
 - The extension tries multiple insertion strategies and frame contexts.
 
+---
+
 ## Privacy
 
 - No backend server for this extension.
 - Settings are stored locally via `chrome.storage.local` (theme mode, etc.).
 - Your formula is used locally for insertion and sent to CodeCogs only for preview image rendering.
+
+See more: [Privacy Policy](public/privacy-policy.md)
+
+---
 
 ## Development
 
@@ -66,11 +96,24 @@ Run locally:
 2. Make code changes.
 3. Reload extension in `chrome://extensions`.
 
+---
+
 ## Links
 
 - Sponsor: [Study-Track](https://study-track.app/?ref=sowiso-latex-helper)
 - GitHub: [flodlol/Sowiso-LaTeX-Helper](https://github.com/flodlol/Sowiso-LaTeX-Helper)
 
+---
+
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT — do whatever you want with it.
+
+---
+
+<div align="center">
+  If you find this useful, a star on GitHub would be nice. ⭐ <br/>
+  Thanks for checking it out! ❤️
+  <br/>
+  <a href="https://github.com/sponsors/flodlol">Sponsor this project</a>
+</div>
