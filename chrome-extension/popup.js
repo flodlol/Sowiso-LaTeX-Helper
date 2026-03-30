@@ -1758,7 +1758,20 @@ function sowisoMainWorldApiInsert(tabId, formula, latexSource) {
                   return null;
                 }
 
-                if (tag === "maction" || tag === "mstyle" || tag === "mpadded" || tag === "mphantom") {
+                if (tag === "maction") {
+                  const elementChildren = [...node.childNodes]
+                    .filter((child) => child.nodeType === Node.ELEMENT_NODE);
+                  if (elementChildren.length === 0) {
+                    return null;
+                  }
+                  const rawSelection = Number.parseInt(node.getAttribute("selection") || "1", 10);
+                  const selection = Number.isFinite(rawSelection) ? rawSelection : 1;
+                  const selectedIndex = Math.max(0, Math.min(elementChildren.length - 1, selection - 1));
+                  const selected = elementChildren[selectedIndex] || elementChildren[0];
+                  return sanitizeNode(selected, outDoc);
+                }
+
+                if (tag === "mstyle" || tag === "mpadded" || tag === "mphantom") {
                   const childNodes = [...node.childNodes]
                     .map((child) => sanitizeNode(child, outDoc))
                     .filter(Boolean);
@@ -2432,10 +2445,16 @@ function sowisoMainWorldApiInsert(tabId, formula, latexSource) {
           runClassSync("FormulaEditor.class-sync-final");
 
           const changed = changedFrom(beforeState);
+          const finalOk = hasLatexCommands ? false : changed.ok;
+          const finalError = finalOk
+            ? undefined
+            : (hasLatexCommands
+              ? "Complex LaTeX insertion failed: MathML import was not accepted by MathDox."
+              : "No visible canvas change after MAIN world API attempts.");
 
           return {
-            ok: changed.ok,
-            error: changed.ok ? undefined : "No visible canvas change after MAIN world API attempts.",
+            ok: finalOk,
+            error: finalError,
             valueChanged: changed.valueChanged,
             canvasChanged: changed.canvasChanged,
             anyVisibleCanvasChanged: changed.anyVisibleCanvasChanged,
