@@ -2,7 +2,7 @@
   <img src="public/logo/128.png" alt="Study-Track Logo" width="160">
   <h1>Sowiso LaTeX Helper</h1>
   <p>
-    Tiny Chrome extension I made to speed up writing math in Sowiso.<br>
+    Tiny Chrome extension made to speed up writing math in Sowiso.<br>
     
   </p>
   <p>
