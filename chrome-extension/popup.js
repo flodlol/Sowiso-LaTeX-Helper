@@ -442,6 +442,14 @@ function updatePreview() {
   previewImage.src = src;
 }
 
+function isInjectableTabUrl(url) {
+  return typeof url === "string" && /^(https?|file):\/\//i.test(url);
+}
+
+function isSowisoTabUrl(url) {
+  return typeof url === "string" && /^https?:\/\/(?:[^/]+\.)?sowiso\.nl\//i.test(url);
+}
+
 function getActiveTab() {
   return new Promise((resolve) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -3521,43 +3529,53 @@ async function insertIntoPage() {
     return;
   }
 
-  if (!activeTab.url || !activeTab.url.startsWith("https://cloud.sowiso.nl/")) {
-    setStatus("Open a cloud.sowiso.nl exercise tab first.", true);
+  if (!isInjectableTabUrl(activeTab.url)) {
+    setStatus("Open a regular website tab first.", true);
     appendDebug("Aborted: unsupported tab URL", { url: activeTab.url || null });
     return;
   }
 
+  const isSowisoTab = isSowisoTabUrl(activeTab.url);
   const frameDetails = await getFrameDetails(activeTab.id);
   appendDebug("Frame details", frameDetails);
 
   const injection = await injectContentScript(activeTab.id);
   appendDebug("Content script injection", injection);
 
-  const slotFocus = await focusSowisoSlot(activeTab.id);
-  appendDebug("Slot focus attempt", slotFocus);
+  let slotFocus = { ok: false, skipped: !isSowisoTab };
+  let mathdoxResult = { ok: false, skipped: !isSowisoTab };
+  let slotKeyTypeResult = { ok: false, skipped: !isSowisoTab };
+  let mainWorldApiResult = { ok: false, skipped: !isSowisoTab };
 
-  const mathdoxResult = await sowisoTextareaInsert(activeTab.id, formula);
-  appendDebug("MathDox textarea insert result", mathdoxResult);
-  if (mathdoxResult.ok) {
-    setStatus("Formula inserted.", false);
-    appendDebug("Completed via MathDox textarea insertion");
-    return;
-  }
+  if (isSowisoTab) {
+    slotFocus = await focusSowisoSlot(activeTab.id);
+    appendDebug("Slot focus attempt", slotFocus);
 
-  const slotKeyTypeResult = await sowisoSlotKeyTypeInsert(activeTab.id, formula);
-  appendDebug("Direct slot key typing result", slotKeyTypeResult);
-  if (slotKeyTypeResult.ok) {
-    setStatus("Formula inserted.", false);
-    appendDebug("Completed via direct slot key typing");
-    return;
-  }
+    mathdoxResult = await sowisoTextareaInsert(activeTab.id, formula);
+    appendDebug("MathDox textarea insert result", mathdoxResult);
+    if (mathdoxResult.ok) {
+      setStatus("Formula inserted.", false);
+      appendDebug("Completed via MathDox textarea insertion");
+      return;
+    }
 
-  const mainWorldApiResult = await sowisoMainWorldApiInsert(activeTab.id, formula, wrapped);
-  appendDebug("MAIN world MathDox API result", mainWorldApiResult);
-  if (mainWorldApiResult.ok) {
-    setStatus("Formula inserted.", false);
-    appendDebug("Completed via MAIN world MathDox API");
-    return;
+    slotKeyTypeResult = await sowisoSlotKeyTypeInsert(activeTab.id, formula);
+    appendDebug("Direct slot key typing result", slotKeyTypeResult);
+    if (slotKeyTypeResult.ok) {
+      setStatus("Formula inserted.", false);
+      appendDebug("Completed via direct slot key typing");
+      return;
+    }
+
+    mainWorldApiResult = await sowisoMainWorldApiInsert(activeTab.id, formula, wrapped);
+    appendDebug("MAIN world MathDox API result", mainWorldApiResult);
+    if (mainWorldApiResult.ok) {
+      setStatus("Formula inserted.", false);
+      appendDebug("Completed via MAIN world MathDox API");
+      return;
+    }
+  } else {
+    appendDebug("Skipping Sowiso-specific insertion flow", { url: activeTab.url || null });
   }
 
   const frameInsertResult = await sendInsertToAnyFrame(activeTab.id, formula, injection.injectedFrames);
@@ -3577,11 +3595,11 @@ async function insertIntoPage() {
   }
 
   const failureMessage =
+    frameInsertResult.error ||
+    directFallbackResult.error ||
     mathdoxResult.error ||
     slotKeyTypeResult.error ||
     mainWorldApiResult.error ||
-    frameInsertResult.error ||
-    directFallbackResult.error ||
     "Direct insertion failed.";
   setStatus(failureMessage, true);
   appendDebug("Stopped: all direct insertion paths failed", {

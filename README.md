@@ -40,8 +40,9 @@
 
 ## Supported Pages
 
-- `https://cloud.sowiso.nl/*`
-- `https://*.sowiso.nl/*`
+- All regular website tabs (`http://`, `https://`, and `file://` when Chrome file access is enabled).
+- Sowiso pages get the specialized MathDox insertion flow.
+- Other sites fall back to normal text input and `contenteditable` insertion.
 
 ---
 
@@ -57,7 +58,7 @@
 
 ## How To Use
 
-1. Open a Sowiso exercise page.
+1. Open the page where you want to insert the formula.
 2. Click once in the answer field you want to fill.
 3. Open the extension side panel.
 4. Enter your LaTeX.
@@ -70,6 +71,8 @@
 ## Notes
 
 - Preview rendering uses CodeCogs (`https://latex.codecogs.com`) and needs internet access.
+- The extension uses Chrome's `activeTab` access model, so it only gets temporary access to the page you explicitly open/use it on.
+- Browser-internal pages such as `chrome://` are restricted by Chrome and cannot be scripted.
 - If insertion fails, click the answer field again and retry.
 - The extension tries multiple insertion strategies and frame contexts.
 

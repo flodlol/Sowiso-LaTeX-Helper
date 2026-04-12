@@ -2,9 +2,8 @@
   "manifest_version": 3,
   "name": "Sowiso LaTeX Helper",
   "description": "Paste LaTeX, preview it, and insert it into the currently active exercise field.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "permissions": ["activeTab", "tabs", "storage", "sidePanel", "webNavigation", "scripting", "debugger"],
-  "host_permissions": ["https://cloud.sowiso.nl/*", "https://*.sowiso.nl/*"],
   "background": {
     "service_worker": "background.js"
   },
@@ -25,13 +24,5 @@
   },
   "side_panel": {
     "default_path": "popup.html"
-  },
-  "content_scripts": [
-    {
-      "matches": ["https://cloud.sowiso.nl/*", "https://*.sowiso.nl/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ]
+  }
 }

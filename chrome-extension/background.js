@@ -24,14 +24,24 @@ function isSupportedSidePanelUrl(url) {
   if (typeof url !== "string" || !url) {
     return false;
   }
-  return /^https?:\/\//i.test(url);
+
+  return /^(https?|file):\/\//i.test(url);
 }
 
-function setSidePanelEnabledForTab(tabId, url) {
-  if (!chrome.sidePanel) {
+async function setSidePanelEnabledForTab(tabId, url) {
+  if (!chrome.sidePanel || typeof chrome.sidePanel.setOptions !== "function") {
     return;
   }
-  chrome.sidePanel.setOptions({ tabId, enabled: isSupportedSidePanelUrl(url) });
+
+  try {
+    await chrome.sidePanel.setOptions({
+      tabId,
+      path: "popup.html",
+      enabled: isSupportedSidePanelUrl(url)
+    });
+  } catch (error) {
+    console.warn("Failed to sync side panel state for tab.", { tabId, url, error });
+  }
 }
 
 function syncAllOpenTabs() {
@@ -44,7 +54,7 @@ function syncAllOpenTabs() {
     }
     for (const tab of tabs) {
       if (tab && typeof tab.id === "number") {
-        setSidePanelEnabledForTab(tab.id, tab.url || "");
+        void setSidePanelEnabledForTab(tab.id, tab.url || "");
       }
     }
   });
@@ -52,7 +62,7 @@ function syncAllOpenTabs() {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab.url || "";
-  setSidePanelEnabledForTab(tabId, url);
+  void setSidePanelEnabledForTab(tabId, url);
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
@@ -63,7 +73,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     if (chrome.runtime.lastError || !tab) {
       return;
     }
-    setSidePanelEnabledForTab(activeInfo.tabId, tab.url || "");
+    void setSidePanelEnabledForTab(activeInfo.tabId, tab.url || "");
   });
 });
 
