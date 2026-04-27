@@ -415,7 +415,7 @@ function insertFormula(formula) {
       debug.hasVisibleCanvas = beforeVisibleCanvas.count > 0 || afterVisibleCanvas.count > 0 || Boolean(linkedCanvas);
       const visibleEffect = debug.canvasChanged || debug.anyVisibleCanvasChanged;
 
-      if ((debug.hasVisibleCanvas && visibleEffect) || (!debug.hasVisibleCanvas && target.value === formula)) {
+      if (target.value === formula || (debug.hasVisibleCanvas && visibleEffect)) {
         return { ok: true, debug };
       }
       return { ok: false, error: "MathDox execCommand updated hidden value but no visible slot changed.", debug };
@@ -471,7 +471,7 @@ function insertFormula(formula) {
       debug.hasVisibleCanvas = beforeVisibleCanvas.count > 0 || afterVisibleCanvas.count > 0 || Boolean(linkedCanvas);
       const visibleEffect = debug.canvasChanged || debug.anyVisibleCanvasChanged;
 
-      if ((debug.hasVisibleCanvas && visibleEffect) || (!debug.hasVisibleCanvas && focused.value === formula)) {
+      if (focused.value === formula || (debug.hasVisibleCanvas && visibleEffect)) {
         return { ok: true, debug };
       }
       return { ok: false, error: "Focused MathDox execCommand updated hidden value but no visible slot changed.", debug };

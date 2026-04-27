@@ -72,6 +72,7 @@
 
 - Preview rendering uses CodeCogs (`https://latex.codecogs.com`) and needs internet access.
 - The extension uses Chrome's `activeTab` access model, so it only gets temporary access to the page you explicitly open/use it on.
+- A host permission is any match pattern specified in the `"permissions"` and `"content_scripts"` fields of the extension manifest.
 - Browser-internal pages such as `chrome://` are restricted by Chrome and cannot be scripted.
 - If insertion fails, click the answer field again and retry.
 - The extension tries multiple insertion strategies and frame contexts.
